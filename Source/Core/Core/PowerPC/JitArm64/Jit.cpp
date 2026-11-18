@@ -432,8 +432,19 @@ void JitArm64::Cleanup()
 
   if (m_ppc_state.feature_flags & FEATURE_FLAG_PERFMON)
   {
-    ABI_CallFunction(&PowerPC::UpdatePerformanceMonitor, js.downcountAmount, js.numLoadStoreInst,
-                     js.numFloatingPointInst, &m_ppc_state);
+    // Games that turn the performance monitor on get here at the end of every block, so only add
+    // up what the block ran. PowerPC::FlushPerformanceMonitor applies the totals to the counters
+    // when something looks at them and at the end of each timing slice.
+    const auto tally = [this](u32 amount, s32 offset) {
+      if (amount == 0)
+        return;
+      LDR(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, offset);
+      ADDI2R(ARM64Reg::W0, ARM64Reg::W0, amount, ARM64Reg::W1);
+      STR(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, offset);
+    };
+    tally(js.downcountAmount, PPCSTATE_OFF(perfmon_pending_cycles));
+    tally(js.numLoadStoreInst, PPCSTATE_OFF(perfmon_pending_load_stores));
+    tally(js.numFloatingPointInst, PPCSTATE_OFF(perfmon_pending_fp_insts));
   }
 }
 

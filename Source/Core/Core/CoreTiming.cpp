@@ -380,6 +380,9 @@ void CoreTimingManager::Advance()
 
   ppc_state.downcount = CyclesToDowncount(m_globals.slice_length);
 
+  // A counter that overflowed during the slice raises its exception here.
+  PowerPC::FlushPerformanceMonitor(ppc_state);
+
   // Check for any external exceptions.
   // It's important to do this after processing events otherwise any exceptions will be delayed
   // until the next slice:

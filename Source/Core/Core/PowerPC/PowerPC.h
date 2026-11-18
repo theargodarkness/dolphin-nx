@@ -179,6 +179,12 @@ struct PowerPCState
   alignas(16) PairedSingle ps[32];
 #endif
 
+  // What the JIT has run since the performance monitor counters were last brought up to date.
+  // FlushPerformanceMonitor folds these into the counters.
+  u32 perfmon_pending_cycles = 0;
+  u32 perfmon_pending_load_stores = 0;
+  u32 perfmon_pending_fp_insts = 0;
+
   std::array<u32, 16> sr{};  // Segment registers.
 
   // special purpose registers - controls quantizers, DMA, and lots of other misc extensions.
@@ -338,6 +344,12 @@ private:
 
 void UpdatePerformanceMonitor(u32 cycles, u32 num_load_stores, u32 num_fp_inst,
                               PowerPCState& ppc_state);
+
+// JitArm64 only tallies what each block ran, because calling UpdatePerformanceMonitor at the end
+// of every block is slow in the few games that turn the counters on. This applies the tally. It
+// has to run before anything reads or writes the counters or their control registers, and before
+// external exceptions are checked at the end of a timing slice.
+void FlushPerformanceMonitor(PowerPCState& ppc_state);
 
 void CheckExceptionsFromJIT(PowerPCManager& power_pc);
 void CheckExternalExceptionsFromJIT(PowerPCManager& power_pc);

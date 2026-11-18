@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <utility>
 
 #include "Common/Assert.h"
 #include "Common/ChunkFile.h"
@@ -81,6 +82,10 @@ void PowerPCManager::DoState(PointerWrap& p)
 
   const std::array<u32, 16> old_sr = m_ppc_state.sr;
 
+  // The tally is not part of the state. Folding it in loses nothing, and a load replaces the
+  // counters anyway.
+  FlushPerformanceMonitor(m_ppc_state);
+
   p.DoArray(m_ppc_state.gpr);
   p.Do(m_ppc_state.pc);
   p.Do(m_ppc_state.npc);
@@ -144,6 +149,9 @@ void PowerPCManager::ResetRegisters()
   std::ranges::fill(m_ppc_state.sr, 0U);
   std::ranges::fill(m_ppc_state.gpr, 0U);
   std::ranges::fill(m_ppc_state.spr, 0U);
+  m_ppc_state.perfmon_pending_cycles = 0;
+  m_ppc_state.perfmon_pending_load_stores = 0;
+  m_ppc_state.perfmon_pending_fp_insts = 0;
 
   // Gamecube:
   // 0x00080200 = lonestar 2.0
@@ -473,6 +481,15 @@ void UpdatePerformanceMonitor(u32 cycles, u32 num_load_stores, u32 num_fp_inst,
   {
     ppc_state.Exceptions |= EXCEPTION_PERFORMANCE_MONITOR;
   }
+}
+
+void FlushPerformanceMonitor(PowerPCState& ppc_state)
+{
+  const u32 cycles = std::exchange(ppc_state.perfmon_pending_cycles, 0);
+  const u32 num_load_stores = std::exchange(ppc_state.perfmon_pending_load_stores, 0);
+  const u32 num_fp_inst = std::exchange(ppc_state.perfmon_pending_fp_insts, 0);
+  if ((cycles | num_load_stores | num_fp_inst) != 0)
+    UpdatePerformanceMonitor(cycles, num_load_stores, num_fp_inst, ppc_state);
 }
 
 void PowerPCManager::CheckExceptions()
