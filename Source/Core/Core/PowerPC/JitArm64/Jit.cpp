@@ -317,6 +317,9 @@ void JitArm64::ResetFreeMemoryRanges(size_t routines_near_size, size_t routines_
 
 void JitArm64::Shutdown()
 {
+  // Whichever CPU core runs next knows nothing of the lazy flags.
+  PowerPC::ResolveLazyFPRF(m_ppc_state);
+
   auto& memory = m_system.GetMemory();
   memory.ShutdownFastmemArena();
   FreeCodeSpace();
@@ -339,6 +342,10 @@ void JitArm64::FallBackToInterpreter(UGeckoInstruction inst)
     ADD(WA, WA, 4);
     STR(IndexType::Unsigned, WA, PPC_REG, PPCSTATE_OFF(npc));
   }
+
+  // The interpreter reads and writes FPSCR directly.
+  if (m_fprf)
+    ABI_CallFunction(&PowerPC::ResolveLazyFPRF, &m_ppc_state);
 
   Interpreter::Instruction instr = Interpreter::GetInterpreterOp(inst);
   ABI_CallFunction(instr, &m_system.GetInterpreter(), inst.hex);
@@ -1256,6 +1263,7 @@ std::vector<JitBase::CodeRegion> JitArm64::GetCodeRegions() const
       {"JIT asm: cstd", cstd},
       {"JIT asm: fprf_single", fprf_single},
       {"JIT asm: fprf_double", fprf_double},
+      {"JIT asm: resolve_lazy_fprf", resolve_lazy_fprf},
       {"JIT asm: fmadds_eft", fmadds_eft},
       {"JIT asm: ps_madd_eft", ps_madd_eft},
       {"JIT asm: paired_load_quantized", reinterpret_cast<const u8*>(paired_load_quantized)},

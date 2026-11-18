@@ -773,6 +773,8 @@ void JitArm64::mcrfs(UGeckoInstruction inst)
   INSTRUCTION_START
   JITDISABLE(bJITSystemRegistersOff);
 
+  ResolveLazyFPRF();
+
   u8 shift = 4 * (7 - inst.CRFS);
   u32 mask = 0xF << shift;
   u32 field = inst.CRFD;
@@ -808,6 +810,8 @@ void JitArm64::mffsx(UGeckoInstruction inst)
   JITDISABLE(bJITSystemRegistersOff);
   FALLBACK_IF(inst.Rc);
 
+  ResolveLazyFPRF();
+
   auto WA = gpr.GetScopedReg();
   ARM64Reg XA = EncodeRegTo64(WA);
 
@@ -824,6 +828,8 @@ void JitArm64::mtfsb0x(UGeckoInstruction inst)
   INSTRUCTION_START
   JITDISABLE(bJITSystemRegistersOff);
   FALLBACK_IF(inst.Rc);
+
+  ResolveLazyFPRF();
 
   const u32 mask = 0x80000000 >> inst.CRBD;
   const u32 inverted_mask = ~mask;
@@ -853,6 +859,8 @@ void JitArm64::mtfsb1x(UGeckoInstruction inst)
   JITDISABLE(bJITSystemRegistersOff);
   FALLBACK_IF(inst.Rc);
   FALLBACK_IF(jo.fp_exceptions);
+
+  ResolveLazyFPRF();
 
   const u32 mask = 0x80000000 >> inst.CRBD;
 
@@ -888,6 +896,8 @@ void JitArm64::mtfsfix(UGeckoInstruction inst)
   JITDISABLE(bJITSystemRegistersOff);
   FALLBACK_IF(inst.Rc);
   FALLBACK_IF(jo.fp_exceptions);
+
+  ResolveLazyFPRF();
 
   u8 imm = (inst.hex >> (31 - 19)) & 0xF;
   u8 shift = 28 - 4 * inst.CRFD;
@@ -930,6 +940,8 @@ void JitArm64::mtfsfx(UGeckoInstruction inst)
   JITDISABLE(bJITSystemRegistersOff);
   FALLBACK_IF(inst.Rc);
   FALLBACK_IF(jo.fp_exceptions);
+
+  ResolveLazyFPRF();
 
   u32 mask = 0;
   for (int i = 0; i < 8; i++)

@@ -333,6 +333,7 @@ protected:
   void GenerateConvertDoubleToSingle();
   void GenerateConvertSingleToDouble();
   void GenerateFPRF(bool single);
+  void GenerateResolveLazyFPRF();
   void GenerateFmaddsEft();
   void GeneratePsMaddEft();
   void GenerateQuantizedLoads();
@@ -408,6 +409,8 @@ protected:
   bool MultiplyImmediate(u32 imm, int a, int d, bool rc);
 
   void SetFPRFIfNeeded(bool single, Arm64Gen::ARM64Reg reg);
+  // Emits a call that brings FPSCR.FPRF up to date. Call it before any register is bound.
+  void ResolveLazyFPRF();
   void Force25BitPrecision(Arm64Gen::ARM64Reg output, Arm64Gen::ARM64Reg input);
 
   // The keys store the entry point of a block. Lookups find the currently running block through

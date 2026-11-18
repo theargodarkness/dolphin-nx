@@ -287,6 +287,11 @@ void JitArm64::GenerateCommonAsm()
   GenerateFPRF(false);
   Common::JitRegister::Register(GetAsmRoutines()->fprf_single, GetCodePtr(), "JIT_FPRF");
 
+  GetAsmRoutines()->resolve_lazy_fprf = GetCodePtr();
+  GenerateResolveLazyFPRF();
+  Common::JitRegister::Register(GetAsmRoutines()->resolve_lazy_fprf, GetCodePtr(),
+                                "JIT_resolve_lazy_fprf");
+
   GetAsmRoutines()->fmadds_eft = GetCodePtr();
   GenerateFmaddsEft();
   Common::JitRegister::Register(GetAsmRoutines()->fmadds_eft, GetCodePtr(), "JIT_fmadds_eft");
@@ -482,6 +487,28 @@ void JitArm64::GenerateConvertSingleToDouble()
 }
 
 // Input in X0. Outputs to memory (PPCState). Clobbers X0-X4 and flags.
+// Brings FPSCR.FPRF up to date. Callable from anywhere in a block: only W0, W30 and the flags are
+// lost. Nothing is pending most of the time, so that case returns straight away.
+void JitArm64::GenerateResolveLazyFPRF()
+{
+  LDRH(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, PPCSTATE_OFF(lazy_fprf_ctrl));
+  CMP(ARM64Reg::W0, PowerPC::LAZY_FPRF_NONE);
+  FixupBranch pending = B(CCFlags::CC_NEQ);
+  RET();
+
+  SetJumpTarget(pending);
+
+  // CALLER_SAVED_GPRS includes X30, which is this routine's own return address.
+  const BitSet32 gprs_to_push = CALLER_SAVED_GPRS;
+  const BitSet32 fprs_to_push = BitSet32(0xFFFFFFFF);
+  ABI_PushRegisters(gprs_to_push);
+  m_float_emit.ABI_PushRegisters(fprs_to_push, ARM64Reg::X30);
+  ABI_CallFunction(&PowerPC::ResolveLazyFPRF, &m_ppc_state);
+  m_float_emit.ABI_PopRegisters(fprs_to_push, ARM64Reg::X30);
+  ABI_PopRegisters(gprs_to_push);
+  RET();
+}
+
 void JitArm64::GenerateFPRF(bool single)
 {
   const auto reg_encoder = single ? EncodeRegTo32 : EncodeRegTo64;

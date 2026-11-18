@@ -28,21 +28,51 @@ void JitArm64::SetFPRFIfNeeded(bool single, ARM64Reg reg)
   if (!m_fprf || !js.op->wantsFPRF)
     return;
 
-  gpr.Lock(ARM64Reg::W0, ARM64Reg::W1, ARM64Reg::W2, ARM64Reg::W3, ARM64Reg::W4, ARM64Reg::W30);
+  // Classifying every result is expensive in the games that need FPRF, and almost none of the
+  // classifications are ever looked at. Record the result and leave the work to
+  // PowerPC::ResolveLazyFPRF.
+  static_assert(PPCSTATE_OFF(lazy_fprf_bits) % 8 == 0);
+  static_assert(PPCSTATE_OFF(lazy_fprf_ctrl) % 2 == 0);
 
-  const ARM64Reg routine_input_reg = single ? ARM64Reg::W0 : ARM64Reg::X0;
+  const int size = single ? 32 : 64;
   if (IsVector(reg))
   {
-    m_float_emit.FMOV(routine_input_reg, single ? EncodeRegToSingle(reg) : EncodeRegToDouble(reg));
+    m_float_emit.STR(size, IndexType::Unsigned,
+                     single ? EncodeRegToSingle(reg) : EncodeRegToDouble(reg), PPC_REG,
+                     PPCSTATE_OFF(lazy_fprf_bits));
   }
-  else if (reg != routine_input_reg)
+  else
   {
-    MOV(routine_input_reg, reg);
+    STR(IndexType::Unsigned, single ? EncodeRegTo32(reg) : EncodeRegTo64(reg), PPC_REG,
+        PPCSTATE_OFF(lazy_fprf_bits));
   }
 
-  BL(single ? GetAsmRoutines()->fprf_single : GetAsmRoutines()->fprf_double);
+  // This also drops the FPCC of any earlier compare, which the new result replaces.
+  if (single)
+  {
+    static_assert(PowerPC::LAZY_FPRF_SINGLE == 0);
+    STRH(IndexType::Unsigned, ARM64Reg::WZR, PPC_REG, PPCSTATE_OFF(lazy_fprf_ctrl));
+  }
+  else
+  {
+    const auto kind_reg = gpr.GetScopedReg();
+    MOVI2R(kind_reg, PowerPC::LAZY_FPRF_DOUBLE);
+    STRH(IndexType::Unsigned, kind_reg, PPC_REG, PPCSTATE_OFF(lazy_fprf_ctrl));
+  }
+}
 
-  gpr.Unlock(ARM64Reg::W0, ARM64Reg::W1, ARM64Reg::W2, ARM64Reg::W3, ARM64Reg::W4, ARM64Reg::W30);
+void JitArm64::ResolveLazyFPRF()
+{
+  // Blocks only record results while FPRF emulation is on.
+  if (!m_fprf)
+    return;
+
+  // The routine compares, which would lose a carry kept in the host flags.
+  FlushCarry();
+
+  gpr.Lock(ARM64Reg::W0, ARM64Reg::W30);
+  BL(GetAsmRoutines()->resolve_lazy_fprf);
+  gpr.Unlock(ARM64Reg::W0, ARM64Reg::W30);
 }
 
 // Emulate the odd truncation/rounding that the PowerPC does on the RHS operand before
@@ -513,14 +543,6 @@ void JitArm64::FloatCompare(UGeckoInstruction inst, bool upper)
   gpr.BindCRToRegister(crf, false);
   const ARM64Reg XA = gpr.CR(crf);
 
-  Arm64GPRCache::ScopedARM64Reg fpscr_reg = ARM64Reg::INVALID_REG;
-  if (fprf)
-  {
-    fpscr_reg = gpr.GetScopedReg();
-    LDR(IndexType::Unsigned, fpscr_reg, PPC_REG, PPCSTATE_OFF(fpscr));
-    AND(fpscr_reg, fpscr_reg, LogicalImm(~FPCC_MASK, GPRSize::B32));
-  }
-
   const Arm64GPRCache::ScopedARM64Reg temp_reg = gpr.GetScopedReg();
   Arm64GPRCache::ScopedARM64Reg fpcc_reg = ARM64Reg::INVALID_REG;
   if (fprf)
@@ -569,17 +591,18 @@ void JitArm64::FloatCompare(UGeckoInstruction inst, bool upper)
 
   if (fprf)
   {
-    MOVI2R(fpcc_reg, PowerPC::CR_EQ << FPRF_SHIFT);
+    // FPCC goes into the high byte of lazy_fprf_ctrl. Whatever result is on record there keeps
+    // deciding the class bit, as it would have if FPSCR had been updated directly.
+    MOVI2R(fpcc_reg, PowerPC::LAZY_FPCC_VALID | PowerPC::CR_EQ);
     if (a != b)
     {
-      MOVI2R(temp_reg, PowerPC::CR_GT << FPRF_SHIFT);
+      MOVI2R(temp_reg, PowerPC::LAZY_FPCC_VALID | PowerPC::CR_GT);
       CSEL(fpcc_reg, temp_reg, fpcc_reg, CC_GT);
-      MOVI2R(temp_reg, PowerPC::CR_LT << FPRF_SHIFT);
+      MOVI2R(temp_reg, PowerPC::LAZY_FPCC_VALID | PowerPC::CR_LT);
       CSEL(fpcc_reg, temp_reg, fpcc_reg, CC_MI);
     }
-    MOVI2R(temp_reg, PowerPC::CR_SO << FPRF_SHIFT);
+    MOVI2R(temp_reg, PowerPC::LAZY_FPCC_VALID | PowerPC::CR_SO);
     CSEL(fpcc_reg, temp_reg, fpcc_reg, CC_VS);
-    ORR(fpscr_reg, fpscr_reg, fpcc_reg);
   }
 
   ASSERT_MSG(DYNA_REC, singles == (fpr.IsSingle(a, true) && fpr.IsSingle(b, true)),
@@ -587,7 +610,7 @@ void JitArm64::FloatCompare(UGeckoInstruction inst, bool upper)
 
   if (fprf)
   {
-    STR(IndexType::Unsigned, fpscr_reg, PPC_REG, PPCSTATE_OFF(fpscr));
+    STRB(IndexType::Unsigned, fpcc_reg, PPC_REG, PPCSTATE_OFF(lazy_fprf_ctrl) + 1);
   }
 }
 

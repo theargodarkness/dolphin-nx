@@ -117,6 +117,17 @@ static_assert(std::is_standard_layout<PairedSingle>(), "PairedSingle must be sta
 // Better code is generated if these are in the first 260 bytes: gpr
 // Better code is generated if these are in the first 520 bytes: ps
 // Unfortunately not all of those fit in 520 bytes, but we can fit most of ps and all of the rest.
+enum LazyFPRFKind : u16
+{
+  // A single precision result in the low 32 bits. Zero, so the JIT can store it from the zero
+  // register.
+  LAZY_FPRF_SINGLE = 0,
+  LAZY_FPRF_DOUBLE = 1,
+  // FPSCR.FPRF is already up to date.
+  LAZY_FPRF_NONE = 2,
+};
+constexpr u8 LAZY_FPCC_VALID = 0x80;
+
 struct PowerPCState
 {
   u32 pc = 0;  // program counter
@@ -184,6 +195,13 @@ struct PowerPCState
   u32 perfmon_pending_cycles = 0;
   u32 perfmon_pending_load_stores = 0;
   u32 perfmon_pending_fp_insts = 0;
+
+  // JitArm64 does not work out FPSCR.FPRF after every floating point instruction. It records the
+  // result here and ResolveLazyFPRF classifies it once something needs the flags.
+  // The low byte of lazy_fprf_ctrl says what lazy_fprf_bits holds (a LazyFPRFKind). The high byte
+  // is zero, or LAZY_FPCC_VALID plus the FPCC nibble of a compare that ran after that result.
+  alignas(8) u64 lazy_fprf_bits = 0;
+  u16 lazy_fprf_ctrl = LAZY_FPRF_NONE;
 
   std::array<u32, 16> sr{};  // Segment registers.
 
@@ -350,6 +368,10 @@ void UpdatePerformanceMonitor(u32 cycles, u32 num_load_stores, u32 num_fp_inst,
 // has to run before anything reads or writes the counters or their control registers, and before
 // external exceptions are checked at the end of a timing slice.
 void FlushPerformanceMonitor(PowerPCState& ppc_state);
+
+// Brings FPSCR.FPRF up to date with what JitArm64 recorded. Has to run before FPSCR is read or
+// written as a whole, and before anything other than JitArm64 touches FPRF.
+void ResolveLazyFPRF(PowerPCState& ppc_state);
 
 void CheckExceptionsFromJIT(PowerPCManager& power_pc);
 void CheckExternalExceptionsFromJIT(PowerPCManager& power_pc);

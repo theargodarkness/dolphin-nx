@@ -85,6 +85,7 @@ void PowerPCManager::DoState(PointerWrap& p)
   // The tally is not part of the state. Folding it in loses nothing, and a load replaces the
   // counters anyway.
   FlushPerformanceMonitor(m_ppc_state);
+  ResolveLazyFPRF(m_ppc_state);
 
   p.DoArray(m_ppc_state.gpr);
   p.Do(m_ppc_state.pc);
@@ -152,6 +153,8 @@ void PowerPCManager::ResetRegisters()
   m_ppc_state.perfmon_pending_cycles = 0;
   m_ppc_state.perfmon_pending_load_stores = 0;
   m_ppc_state.perfmon_pending_fp_insts = 0;
+  m_ppc_state.lazy_fprf_bits = 0;
+  m_ppc_state.lazy_fprf_ctrl = LAZY_FPRF_NONE;
 
   // Gamecube:
   // 0x00080200 = lonestar 2.0
@@ -490,6 +493,27 @@ void FlushPerformanceMonitor(PowerPCState& ppc_state)
   const u32 num_fp_inst = std::exchange(ppc_state.perfmon_pending_fp_insts, 0);
   if ((cycles | num_load_stores | num_fp_inst) != 0)
     UpdatePerformanceMonitor(cycles, num_load_stores, num_fp_inst, ppc_state);
+}
+
+void ResolveLazyFPRF(PowerPCState& ppc_state)
+{
+  const u16 ctrl = std::exchange(ppc_state.lazy_fprf_ctrl, LAZY_FPRF_NONE);
+  const u16 kind = ctrl & 0xFF;
+  const u32 fpcc = ctrl >> 8;
+
+  if (kind == LAZY_FPRF_SINGLE)
+  {
+    ppc_state.fpscr.FPRF =
+        Common::ClassifyFloat(std::bit_cast<float>(static_cast<u32>(ppc_state.lazy_fprf_bits)));
+  }
+  else if (kind == LAZY_FPRF_DOUBLE)
+  {
+    ppc_state.fpscr.FPRF = Common::ClassifyDouble(std::bit_cast<double>(ppc_state.lazy_fprf_bits));
+  }
+
+  // A compare replaces FPCC and leaves the class bit above it alone.
+  if (fpcc & LAZY_FPCC_VALID)
+    ppc_state.fpscr.FPRF = (ppc_state.fpscr.FPRF & ~0xFu) | (fpcc & 0xF);
 }
 
 void PowerPCManager::CheckExceptions()
