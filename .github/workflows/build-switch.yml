@@ -41,6 +41,11 @@ jobs:
               -c submodule.Externals/FFmpeg-bin.update=none \
               submodule update --init --recursive --depth 1 --jobs 4
 
+      # The container ships every Switch library, and a few of them shadow the copies this
+      # project bundles and expects to build against.
+      - name: Hide conflicting system libraries
+        run: rm -f "$DEVKITPRO/portlibs/switch/include/tinyxml2.h"
+
       - name: Configure
         run: |
           cmake -S . -B build/switch \
