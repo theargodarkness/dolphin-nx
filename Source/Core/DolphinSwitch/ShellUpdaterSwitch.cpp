@@ -54,7 +54,7 @@ const char* BuildSuffix(bool vulkan)
 
 std::string Describe(const UpdaterSwitch::Release& release)
 {
-  return fmt::format("Nezumiiruka {}{}", release.tag, BuildSuffix(release.vulkan));
+  return fmt::format("dolphin-nx {}{}", release.tag, BuildSuffix(release.vulkan));
 }
 
 std::string SkipKey(const UpdaterSwitch::Release& release)
@@ -151,7 +151,7 @@ brls::Activity* CreateNotesActivity(const std::string& tag, const std::string& n
   scroll->setContentView(box);
 
   auto* frame = new brls::AppletFrame(scroll);
-  frame->setTitle(fmt::format("Nezumiiruka {}", tag));
+  frame->setTitle(fmt::format("dolphin-nx {}", tag));
   return new brls::Activity(frame);
 }
 
@@ -223,7 +223,7 @@ void StartInstall(const UpdaterSwitch::Release& release)
   state->dialog->open();
 
   s_thread = std::thread([state, release, heading] {
-    Common::SetCurrentThreadName("Nezumiiruka update");
+    Common::SetCurrentThreadName("dolphin-nx update");
 
     int last_percent = -1;
     auto result = UpdaterSwitch::Install(release, s_cancelled, [&](u64 downloaded, u64 total) {
@@ -249,7 +249,7 @@ void StartInstall(const UpdaterSwitch::Release& release)
           else if (s_cancelled)
             brls::Application::notify("The update was cancelled.");
           else
-            ShowMessage(fmt::format("Nezumiiruka could not be updated.\n\n{}", result.error()));
+            ShowMessage(fmt::format("dolphin-nx could not be updated.\n\n{}", result.error()));
         });
       });
     });
@@ -283,7 +283,7 @@ void OnChecked(CheckKind kind, const UpdaterSwitch::CheckResult& result)
     else if (result.status == CheckStatus::Error)
       ShowMessage(fmt::format("Could not fetch the release notes.\n\n{}", result.error));
     else
-      ShowMessage(fmt::format("GitHub lists no notes for Nezumiiruka {}.", current));
+      ShowMessage(fmt::format("GitHub lists no notes for dolphin-nx {}.", current));
     return;
   }
 
@@ -296,7 +296,7 @@ void OnChecked(CheckKind kind, const UpdaterSwitch::CheckResult& result)
     break;
   case CheckStatus::UpToDate:
     if (manual)
-      ShowMessage(fmt::format("Nezumiiruka {} is up to date.", current));
+      ShowMessage(fmt::format("dolphin-nx {} is up to date.", current));
     break;
   case CheckStatus::Available:
     if (manual || SkipKey(result.release) != Config::Get(Config::SWITCH_SKIPPED_UPDATE))
@@ -319,7 +319,7 @@ void StartCheck(CheckKind kind)
     if (kind == CheckKind::Manual && s_check_kind == CheckKind::Silent)
       s_check_kind = kind;
     else if (kind != CheckKind::Silent)
-      brls::Application::notify("Nezumiiruka is already checking for updates.");
+      brls::Application::notify("dolphin-nx is already checking for updates.");
     return;
   }
 
@@ -332,7 +332,7 @@ void StartCheck(CheckKind kind)
       Config::Get(Config::SWITCH_UPDATE_CHANNEL) == Config::UpdateChannel::Prerelease;
   const bool vulkan = Config::Get(Config::SWITCH_UPDATE_BUILD) == Config::UpdateBuild::Vulkan;
   s_thread = std::thread([include_prereleases, vulkan] {
-    Common::SetCurrentThreadName("Nezumiiruka update check");
+    Common::SetCurrentThreadName("dolphin-nx update check");
     UpdaterSwitch::CheckResult result =
         UpdaterSwitch::CheckForUpdate(include_prereleases, vulkan, s_cancelled);
 
@@ -345,7 +345,7 @@ void StartCheck(CheckKind kind)
 
 void ShowUpdatedFrom(const std::string& previous)
 {
-  auto* dialog = new brls::Dialog(fmt::format("Nezumiiruka has been updated from {} to {}.",
+  auto* dialog = new brls::Dialog(fmt::format("dolphin-nx has been updated from {} to {}.",
                                               previous, UpdaterSwitch::GetCurrentVersion()));
   dialog->addButton("OK", [] {});
   dialog->addButton("Release notes", [] { brls::sync(ShowReleaseNotes); });

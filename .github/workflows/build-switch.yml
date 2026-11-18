@@ -1,0 +1,64 @@
+name: Build for Switch
+
+# Builds dolphin-nx.nro on every push, and on demand from the Actions tab.
+# The finished file is attached to the run as the "dolphin-nx" artifact.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-switch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bison flex python3 cmake make git ca-certificates
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch submodules
+        run: |
+          git config --global --add safe.directory '*'
+          # Qt and FFmpeg-bin are prebuilt Windows libraries. They are large and unused here.
+          git -c submodule.Externals/Qt.update=none \
+              -c submodule.Externals/FFmpeg-bin.update=none \
+              submodule update --init --recursive --depth 1 --jobs 4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/switch \
+            -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build/switch --target nezumiiruka_nro -j$(nproc)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dolphin-nx
+          path: build/switch/Binaries/dolphin-nx.nro
+          if-no-files-found: error
+
+      # Pushing a tag such as v1.1.2 also publishes the file as a release, which is where the
+      # in-app updater looks.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/switch/Binaries/dolphin-nx.nro

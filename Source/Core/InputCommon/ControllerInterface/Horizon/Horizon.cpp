@@ -76,6 +76,13 @@ constexpr std::array SIDEWAYS_BUTTONS{
     "Sideways Up",    "Sideways Menu", "Sideways Stick Click",
 };
 
+// A single Joy-Con held upright, the way a Wii Remote is held. These follow the hand, so the same
+// binding works for a left and a right Joy-Con.
+constexpr std::array UPRIGHT_BUTTONS{
+    "Upright Right",   "Upright Down",     "Upright Left", "Upright Up",
+    "Upright Trigger", "Upright Shoulder", "Upright Menu", "Upright Stick Click",
+};
+
 // A given Npad reports exactly one style at a time.
 constexpr std::array<HidNpadStyleTag, 6> STYLES{
     HidNpadStyleTag_NpadFullKey, HidNpadStyleTag_NpadHandheld, HidNpadStyleTag_NpadJoyDual,
@@ -181,6 +188,7 @@ public:
     AddStick("Left", m_stick[0], m_stick[1]);
     AddStick("Right", m_stick[2], m_stick[3]);
     AddSidewaysInputs();
+    AddUprightInputs();
 
     // Only ::HidNpadStyleTag_NpadGc fills these in.
     AddInput(new Trigger("Trigger L", m_trigger[0]));
@@ -221,6 +229,7 @@ public:
 
     RefreshHandles();
     UpdateSideways();
+    UpdateUpright();
     UpdateMotion();
     UpdateRumble();
 
@@ -244,19 +253,67 @@ private:
     AddStick("Sideways Stick", m_sideways_stick[0], m_sideways_stick[1]);
   }
 
+  void AddUprightInputs()
+  {
+    for (size_t i = 0; i < UPRIGHT_BUTTONS.size(); ++i)
+      AddInput(new Button(UPRIGHT_BUTTONS[i], m_upright_buttons, 1ULL << i));
+
+    AddStick("Upright Stick", m_upright_stick[0], m_upright_stick[1]);
+  }
+
+  // Packs the listed buttons into consecutive bits, in the order they are given.
+  u64 Pick(std::initializer_list<u64> masks) const
+  {
+    u64 buttons = 0;
+    u64 bit = 1;
+    for (const u64 mask : masks)
+    {
+      if (m_buttons & mask)
+        buttons |= bit;
+      bit <<= 1;
+    }
+    return buttons;
+  }
+
+  void UpdateUpright()
+  {
+    switch (m_handle_style)
+    {
+    case HidNpadStyleTag_NpadJoyLeft:
+      m_upright_buttons =
+          Pick({HidNpadButton_Right, HidNpadButton_Down, HidNpadButton_Left, HidNpadButton_Up,
+                HidNpadButton_ZL, HidNpadButton_L, HidNpadButton_Minus, HidNpadButton_StickL});
+      m_upright_stick = {m_stick[0], m_stick[1]};
+      break;
+    case HidNpadStyleTag_NpadJoyRight:
+      m_upright_buttons =
+          Pick({HidNpadButton_A, HidNpadButton_B, HidNpadButton_Y, HidNpadButton_X,
+                HidNpadButton_ZR, HidNpadButton_R, HidNpadButton_Plus, HidNpadButton_StickR});
+      m_upright_stick = {m_stick[2], m_stick[3]};
+      break;
+    default:
+    {
+      // Paired Joy-Cons and whole controllers answer with either half, so the binding still does
+      // something sensible in handheld mode.
+      m_upright_buttons = Pick({HidNpadButton_A | HidNpadButton_Right,
+                                HidNpadButton_B | HidNpadButton_Down,
+                                HidNpadButton_Y | HidNpadButton_Left,
+                                HidNpadButton_X | HidNpadButton_Up,
+                                HidNpadButton_ZL | HidNpadButton_ZR,
+                                HidNpadButton_L | HidNpadButton_R,
+                                HidNpadButton_Plus | HidNpadButton_Minus,
+                                HidNpadButton_StickL | HidNpadButton_StickR});
+      const bool left_moving = m_stick[0] != 0 || m_stick[1] != 0;
+      m_upright_stick = left_moving ? std::array{m_stick[0], m_stick[1]} :
+                                      std::array{m_stick[2], m_stick[3]};
+      break;
+    }
+    }
+  }
+
   void UpdateSideways()
   {
-    const auto pick = [this](std::initializer_list<u64> masks) {
-      u64 buttons = 0;
-      u64 bit = 1;
-      for (const u64 mask : masks)
-      {
-        if (m_buttons & mask)
-          buttons |= bit;
-        bit <<= 1;
-      }
-      return buttons;
-    };
+    const auto pick = [this](std::initializer_list<u64> masks) { return Pick(masks); };
 
     switch (m_handle_style)
     {
@@ -487,6 +544,9 @@ private:
   std::array<ControlState, 2> m_sideways_stick{};
   std::array<ControlState, 3> m_sideways_accel{};
   std::array<ControlState, 3> m_sideways_gyro{};
+
+  u64 m_upright_buttons = 0;
+  std::array<ControlState, 2> m_upright_stick{};
 
   std::atomic<ControlState> m_rumble_low = 0;
   std::atomic<ControlState> m_rumble_high = 0;

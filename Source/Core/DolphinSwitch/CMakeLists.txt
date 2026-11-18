@@ -17,6 +17,8 @@ add_executable(nezumiiruka
   PauseMenuSwitch.cpp
   PauseMenuSwitch.h
   PerformanceOverlaySwitch.cpp
+  JoyConsSwitch.cpp
+  JoyConsSwitch.h
   PlatformSwitch.cpp
   RiivolutionSwitch.cpp
   RiivolutionSwitch.h
@@ -88,7 +90,7 @@ if(ENABLE_VULKAN)
 endif()
 
 nx_generate_nacp(OUTPUT nezumiiruka.nacp
-  NAME "Nezumiiruka"
+  NAME "dolphin-nx"
   AUTHOR "Dolphin Emulator Project \& PalindromicBreadLoaf"
   VERSION "${NEZUMIIRUKA_VERSION}"
 )
@@ -113,7 +115,7 @@ set_target_properties(nezumiiruka_romfs PROPERTIES
 
 # Defines the `nezumiiruka_nro` target that the Switch build is driven through.
 nx_create_nro(nezumiiruka
-  OUTPUT "${CMAKE_BINARY_DIR}/Binaries/nezumiiruka.nro"
+  OUTPUT "${CMAKE_BINARY_DIR}/Binaries/dolphin-nx.nro"
   ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
   NACP "${CMAKE_CURRENT_BINARY_DIR}/nezumiiruka.nacp"
   ROMFS nezumiiruka_romfs

@@ -194,12 +194,12 @@ extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx)
   if (is_brk)
   {
     const u32 comment = ctx->esr & 0xFFFF;
-    out.Printf("nezumiiruka stopped at brk #%u%s\n", comment,
+    out.Printf("dolphin-nx stopped at brk #%u%s\n", comment,
                comment == BRK_BUILTIN_TRAP ? " (__builtin_trap)" : "");
   }
   else
   {
-    out.Printf("nezumiiruka crashed: %s (error_desc 0x%x)\n", DescribeError(ctx->error_desc),
+    out.Printf("dolphin-nx crashed: %s (error_desc 0x%x)\n", DescribeError(ctx->error_desc),
                ctx->error_desc);
   }
 
@@ -272,7 +272,7 @@ extern "C" void abort()
   const u64 module_base = reinterpret_cast<u64>(&_start);
   const u64 caller = reinterpret_cast<u64>(__builtin_return_address(0));
 
-  out.Printf("nezumiiruka aborted. Something called abort().\n");
+  out.Printf("dolphin-nx aborted. Something called abort().\n");
   if (caller >= module_base)
     out.Printf("abort called from +%lx  (aarch64-none-elf-addr2line -e nezumiiruka.elf)\n",
                caller - module_base);

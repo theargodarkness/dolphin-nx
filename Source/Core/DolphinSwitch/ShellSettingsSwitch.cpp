@@ -909,7 +909,7 @@ void BuildFrameGeneration(PageBuilder& page)
               {{"100%", 1u}, {"50%", 2u}, {"33%", 3u}, {"25%", 4u}});
   page.Toggle("Performance mode", Config::GFX_FRAME_GENERATION_PERFORMANCE);
   page.Note("Frame generation raises both CPU and GPU requirements when enabled. You will need "
-            "to overclock the system to get good results. Nezumiiruka's stastics counters also do "
+            "to overclock the system to get good results. dolphin-nx's stastics counters also do "
             "not account for latency or cost from lsfg running.");
   page.Note("A lower flow scale and performance mode are both faster, at some cost to quality. "
             "Increasing the render resolution bumps the GPU workload for both it and framegen. "
@@ -1310,6 +1310,11 @@ void BuildControls(PageBuilder& page, bool wii)
   {
     page.Header("Controllers");
     page.Action("Change grip and order", "", ShowControllerApplet);
+    page.Toggle("Split Joy-Cons for single Joy-Con profiles", Config::SWITCH_SPLIT_JOYCONS);
+    page.Note("With this on, a detached pair of Joy-Cons becomes two players when a Wii game "
+              "starts with a Wii Remote on the Upright Joy-Con or Sideways Joy-Con profile. The "
+              "left one stays where it was and the right one takes the next free player. They are "
+              "paired again when the game closes.");
   }
 
   std::vector<Option<SerialInterface::SIDevices>> port_devices = {
@@ -1353,6 +1358,12 @@ void BuildControls(PageBuilder& page, bool wii)
     page.Note("Wii Remote 1 is player 1's controller, and so on. By default, HOME is right stick "
               "click and recentre pointer is on left stick click. The right stick also aims the "
               "pointer in the Wii Remote presets.");
+    page.Note("For two players with one Joy-Con each, set Wii Remote 1 and 2 to Emulated and give "
+              "both the Upright Joy-Con profile, or Sideways Joy-Con for games played with the "
+              "Wii Remote on its side. Upright, the stick is the D-pad, the right face button is "
+              "A, the trigger is B, left and bottom are 1 and 2, top is Minus, stick click is "
+              "HOME, and L or R recentres the pointer, which is aimed by motion. With a lone "
+              "Joy-Con as player 1, hold Plus or Minus to open the in-game menu.");
   }
 
   if (page.IsPerGame())
@@ -1588,7 +1599,7 @@ void BuildGameGraphicsMods(PageBuilder& page, const UICommon::GameFile& game)
 
 void BuildAbout(PageBuilder& page)
 {
-  page.Header("Nezumiiruka");
+  page.Header("dolphin-nx");
   page.Info("Version", UpdaterSwitch::GetCurrentVersion());
   page.Info("Build", UpdaterSwitch::IsVulkanBuild() ? "Vulkan" : "Standard");
   page.Info("Revision", Common::GetScmDescStr());
@@ -1641,10 +1652,11 @@ void BuildAbout(PageBuilder& page)
 
   page.Header("Licence");
   page.Note(
-      "Nezumiiruka is a port of the Dolphin emulator, licensed under the GNU GPL version 2 or "
-      "later. The menus use borealis, licensed under the Apache License 2.0. USB loading support "
-      "is provided by libusbhsfs, licensed under the GNU GPL version 2 or later. Frame generation "
-      "support is provided by LSFG-NX, which is licensed under the GNU GPL version 3 or later.");
+      "dolphin-nx is a fork of Nezumiiruka, a port of the Dolphin emulator, licensed under the GNU "
+      "GPL version 2 or later. The menus use borealis, licensed under the Apache License 2.0. USB "
+      "loading support is provided by libusbhsfs, licensed under the GNU GPL version 2 or later. "
+      "Frame generation support is provided by LSFG-NX, which is licensed under the GNU GPL "
+      "version 3 or later.");
 }
 
 brls::View* AddGameFolderCell(PageBuilder& page, const std::string& title,

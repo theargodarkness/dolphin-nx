@@ -40,6 +40,7 @@
 #ifdef HAS_LIBMGBA
 #include "DolphinSwitch/GBAOverlaySwitch.h"
 #endif
+#include "DolphinSwitch/JoyConsSwitch.h"
 #include "DolphinSwitch/PerformanceOverlaySwitch.h"
 #include "DolphinSwitch/PlatformSwitch.h"
 #include "DolphinSwitch/RiivolutionSwitch.h"
@@ -101,7 +102,7 @@ void LogHostEnvironment()
   svcGetInfo(&total_memory, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
   svcGetInfo(&used_memory, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
 
-  NOTICE_LOG_FMT(COMMON, "nezumiiruka {}, build id {}", Common::GetScmDescStr(),
+  NOTICE_LOG_FMT(COMMON, "dolphin-nx {}, build id {}", Common::GetScmDescStr(),
                  Common::HorizonBuildId::GetHex().data());
   NOTICE_LOG_FMT(COMMON, "Applet type {}, core mask {:#06b}, heap {} MiB used of {} MiB",
                  static_cast<int>(appletGetAppletType()), core_mask, used_memory / 0x100000,
@@ -227,6 +228,12 @@ std::string RunGame(PadState& pad, const Shell::BootRequest& request)
   }
 
   NOTICE_LOG_FMT(BOOT, "Booted {}", path);
+
+  // The game's own profile choices are only known once it has booted. The shell wants whole
+  // controllers back afterwards.
+  JoyCons::Update();
+  Common::ScopeGuard joy_con_guard([] { JoyCons::Restore(); });
+
   g_platform->MainLoop();
 
   Core::Stop(system);
@@ -287,7 +294,7 @@ int main(int argc, char* argv[])
 
   PadState pad;
 
-  std::printf("nezumiiruka %s\n", Common::GetScmDescStr().c_str());
+  std::printf("dolphin-nx %s\n", Common::GetScmDescStr().c_str());
 
   MigrateLegacyUserDirectory();
   UICommon::SetUserDirectory("");

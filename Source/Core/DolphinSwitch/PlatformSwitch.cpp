@@ -11,6 +11,7 @@
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/STM/STM.h"
 #include "Core/System.h"
+#include "DolphinSwitch/JoyConsSwitch.h"
 #include "DolphinSwitch/PerformanceOverlaySwitch.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/Statistics.h"
@@ -94,7 +95,9 @@ void PlatformSwitch::UpdateBootBoost(Core::System& system)
 void PlatformSwitch::PollHostInput(Core::System& system)
 {
   padUpdate(&m_pad);
-  const u64 buttons = padGetButtons(&m_pad);
+  // Player one may be holding half a controller.
+  const u64 buttons = JoyCons::TranslateMenuButtons(padGetStyleSet(&m_pad), padGetButtons(&m_pad),
+                                                    JoyCons::GetGrip(0));
 
   m_menu.Update(buttons, ReadGcButtons());
 

@@ -44,6 +44,7 @@ const std::array<Info<std::string>, 4> SWITCH_WIIMOTE_PROFILES{
     Info<std::string>{{System::Main, "Switch", "WiimoteProfile3"}, ""},
     Info<std::string>{{System::Main, "Switch", "WiimoteProfile4"}, ""},
 };
+const Info<bool> SWITCH_SPLIT_JOYCONS{{System::Main, "Switch", "SplitJoyCons"}, true};
 const Info<bool> SWITCH_CHECK_FOR_UPDATES{{System::Main, "Switch", "CheckForUpdates"}, true};
 const Info<UpdateChannel> SWITCH_UPDATE_CHANNEL{{System::Main, "Switch", "UpdateChannel"},
                                                 UpdateChannel::Stable};
