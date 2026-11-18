@@ -72,6 +72,7 @@ jobs:
       # Function addresses, printed to the log so profile reports can be read without the ELF.
       - name: Print symbol table
         run: |
+          export PATH="$DEVKITPRO/devkitA64/bin:$PATH"
           elf=$(find build/switch -name 'nezumiiruka*.elf' | head -n 1)
           aarch64-none-elf-readelf -n "$elf" | grep -i 'build id' || true
           echo "::group::symbols"
