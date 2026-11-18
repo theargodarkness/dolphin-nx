@@ -69,6 +69,15 @@ jobs:
           path: build/switch/**/nezumiiruka*.elf
           if-no-files-found: warn
 
+      # Function addresses, printed to the log so profile reports can be read without the ELF.
+      - name: Print symbol table
+        run: |
+          elf=$(find build/switch -name 'nezumiiruka*.elf' | head -n 1)
+          aarch64-none-elf-readelf -n "$elf" | grep -i 'build id' || true
+          echo "::group::symbols"
+          aarch64-none-elf-nm -n --defined-only -C "$elf" | grep -E '^[0-9a-f]+ [tTwW] ' | cut -c9-170
+          echo "::endgroup::"
+
       # Pushing a tag such as v1.1.2 also publishes the file as a release, which is where the
       # in-app updater looks.
       - name: Publish release
