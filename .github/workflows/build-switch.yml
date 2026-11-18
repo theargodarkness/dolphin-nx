@@ -62,6 +62,13 @@ jobs:
           path: build/switch/Binaries/dolphin-nx.nro
           if-no-files-found: error
 
+      # The unstripped program, for turning addresses in crash logs and profiles into names.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dolphin-nx-symbols
+          path: build/switch/**/nezumiiruka*.elf
+          if-no-files-found: warn
+
       # Pushing a tag such as v1.1.2 also publishes the file as a release, which is where the
       # in-app updater looks.
       - name: Publish release
