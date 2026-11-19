@@ -22,7 +22,12 @@ class DKTexture;
 class DKSwapChain
 {
 public:
-  static constexpr u32 NUM_IMAGES = 2;
+  // Three, not two. With two, the image to draw the next frame into is the one on screen, which
+  // the display only lets go of at the vertical blank after the frame before has finished, and
+  // deko3d makes the GPU wait for that. A frame that takes the GPU a little over one refresh then
+  // costs two, so anything heavier than 16.7 ms dropped a game from 60 to 30 frames a second with
+  // the GPU and both emulation threads half idle. The third image is free whenever that happens.
+  static constexpr u32 NUM_IMAGES = 3;
   static constexpr DkImageFormat FORMAT = DkImageFormat_RGBA8_Unorm;
 
   ~DKSwapChain();
