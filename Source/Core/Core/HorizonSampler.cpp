@@ -1351,6 +1351,13 @@ std::string DescribeEmulation(Core::System& system)
                      Memory::MemoryManager::SupportsReadOnlyMappings() ? "" : ", marked changed",
                      system.GetMemory().GetLogicalBase() != nullptr ? "mapped" : "not mapped");
 
+  out += fmt::format(
+      "reuse translated code {} ({} blocks set aside, {} reused, {} not reusable)\n",
+      OnOff(Config::Get(Config::MAIN_JIT_REUSE_TRANSLATED_CODE)),
+      JitBaseBlockCache::s_blocks_set_aside.load(std::memory_order_relaxed),
+      JitBaseBlockCache::s_blocks_reused.load(std::memory_order_relaxed),
+      JitBaseBlockCache::s_blocks_not_reusable.load(std::memory_order_relaxed));
+
   const int efb_scale = Config::Get(Config::GFX_EFB_SCALE);
   out += fmt::format("video: internal resolution {}, MSAA {}x{}, shaders {}, frame generation ",
                      efb_scale == 0 ? "auto" : fmt::format("{}x", efb_scale),

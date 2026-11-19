@@ -191,7 +191,7 @@ protected:
   Common::HorizonJitStack::Stack m_jit_stack;
 #endif
 
-  static const std::array<std::pair<bool JitBase::*, const Config::Info<bool>*>, 26> JIT_SETTINGS;
+  static const std::array<std::pair<bool JitBase::*, const Config::Info<bool>*>, 27> JIT_SETTINGS;
 
   [[nodiscard]] bool CheckValidity() const;
 
@@ -263,6 +263,8 @@ public:
 
   // This should probably be removed from public:
   JitOptions jo{};
+  // Whether the block cache may put translated code back in service. See JitArm64BlockCache.
+  bool m_reuse_translated_code = false;
   JitState js{};
 
   Core::System& m_system;

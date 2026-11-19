@@ -980,6 +980,7 @@ void BuildEmulation(PageBuilder& page)
   page.Header("Accuracy");
   page.Toggle("Enable MMU", Config::MAIN_MMU);
   page.Toggle("Fast memory for page tables", Config::MAIN_PAGE_TABLE_FASTMEM);
+  page.Toggle("Reuse translated code", Config::MAIN_JIT_REUSE_TRANSLATED_CODE);
   page.Toggle("Accurate CPU cache", Config::MAIN_ACCURATE_CPU_CACHE);
   page.Toggle("Enable FPRF", Config::MAIN_FPRF);
   page.Toggle("Native square root", Config::MAIN_JIT_NATIVE_SQRT);

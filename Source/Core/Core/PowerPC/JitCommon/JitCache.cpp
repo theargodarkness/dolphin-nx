@@ -261,17 +261,10 @@ void JitBaseBlockCache::FinalizeBlock(JitBlock& block, bool block_link,
                                       const PPCAnalyst::CodeBlock& code_block,
                                       const PPCAnalyst::CodeBuffer& code_buffer)
 {
-  size_t index = FastLookupIndexForAddress(block.effectiveAddress, block.feature_flags);
-  if (UsesEntryPoints())
-    SetEntryPoint(index, block.normalEntry);
-  else
-    m_fast_block_map_fallback[index] = &block;
-  block.fast_block_map_index = index;
-
   block.physical_addresses = code_block.m_physical_addresses;
 
   block.originalSize = code_block.m_num_instructions;
-  if (m_jit.IsDebuggingEnabled())
+  if (m_jit.IsDebuggingEnabled() || KeepsOriginalBuffer())
   {
     // TODO C++23: Can do this all in one statement with `std::vector::assign_range`.
     const std::ranges::transform_view original_buffer_transform_view{
@@ -280,6 +273,18 @@ void JitBaseBlockCache::FinalizeBlock(JitBlock& block, bool block_link,
     block.original_buffer.assign(original_buffer_transform_view.begin(),
                                  original_buffer_transform_view.end());
   }
+
+  RegisterBlock(block, block_link);
+}
+
+void JitBaseBlockCache::RegisterBlock(JitBlock& block, bool block_link)
+{
+  size_t index = FastLookupIndexForAddress(block.effectiveAddress, block.feature_flags);
+  if (UsesEntryPoints())
+    SetEntryPoint(index, block.normalEntry);
+  else
+    m_fast_block_map_fallback[index] = &block;
+  block.fast_block_map_index = index;
 
   for (auto [range_start, range_end] : block.physical_addresses)
   {
@@ -416,6 +421,9 @@ void JitBaseBlockCache::InvalidateICache(u32 initial_address, u32 initial_length
 void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 address, u32 length,
                                                  bool forced)
 {
+  if (forced)
+    OnForcedInvalidation(address, length);
+
   // Optimization for the case of invalidating a single cache line, which is used by the dcb*
   // instructions. If the valid_block bit for that cacheline is not set, we can safely skip
   // the remaining invalidation logic.
@@ -440,7 +448,9 @@ void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 addre
   if (destroy_block)
   {
     // destroy JIT blocks
+    m_guest_invalidation = !forced;
     ErasePhysicalRange(physical_address, length);
+    m_guest_invalidation = false;
 
     // If the code was actually modified, we need to clear the relevant entries from the
     // FIFO write address cache, so we don't end up with FIFO checks in places they shouldn't

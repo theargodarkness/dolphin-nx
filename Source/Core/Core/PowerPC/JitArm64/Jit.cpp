@@ -241,6 +241,7 @@ void JitArm64::ClearCache()
   blocks.Clear();
 #endif
   blocks.ClearRangesToFree();
+  blocks.ForgetSetAsideBlocks();
   const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
   m_far_code_0.ClearCodeSpace();
   m_near_code_0.ClearCodeSpace();
@@ -1131,6 +1132,13 @@ void JitArm64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
   FreeRanges();
 
   const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
+
+  // Code the game swapped out and has now brought back unchanged does not need translating again.
+  if (m_reuse_translated_code && !IsDebuggingEnabled() &&
+      blocks.TryReuseBlock(em_address, jo.enableBlocklink))
+  {
+    return;
+  }
 
   std::size_t block_size = m_code_buffer.size();
 

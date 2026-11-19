@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <chrono>
 #include <cstring>
@@ -179,8 +180,26 @@ public:
 
   const u32* GetBlockBitSet() const;
 
+  // How often translated code was set aside when the game replaced the code it came from, picked
+  // up again when the same code returned, and thrown away because different code returned.
+  static inline std::atomic<u32> s_blocks_set_aside{0};
+  static inline std::atomic<u32> s_blocks_reused{0};
+  static inline std::atomic<u32> s_blocks_not_reusable{0};
+
 protected:
   virtual void DestroyBlock(JitBlock& block);
+
+  // Called for invalidations that do not come from the game itself (patches, breakpoints, ...).
+  virtual void OnForcedInvalidation(u32 address, u32 length) {}
+
+  // Whether FinalizeBlock should keep the guest instructions of every block.
+  virtual bool KeepsOriginalBuffer() const { return false; }
+
+  // Makes a block with all of its fields filled in visible to lookups, invalidation and linking.
+  void RegisterBlock(JitBlock& block, bool block_link);
+
+  // Set while blocks are being destroyed because the game invalidated the code they came from.
+  bool m_guest_invalidation = false;
 
   JitBase& m_jit;
 
