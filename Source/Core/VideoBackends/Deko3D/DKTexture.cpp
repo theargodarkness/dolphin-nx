@@ -8,6 +8,7 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <map>
 #include <memory>
 
 #include "Common/Align.h"
@@ -69,13 +70,90 @@ DkTileSize PickTileSize(const TextureConfig& config)
 
   return static_cast<DkTileSize>(tile);
 }
+struct PooledBlock
+{
+  dk::UniqueMemBlock block;
+  u64 returned_on_frame;
+};
+
+// Enough for the textures of a scene the game keeps cutting back to.
+constexpr u64 POOL_MAX_BYTES = 48 * 1024 * 1024;
+constexpr u32 POOL_MAX_BLOCK_BYTES = 8 * 1024 * 1024;
+constexpr u64 POOL_MAX_AGE_FRAMES = 900;
+constexpr u64 POOL_TRIM_INTERVAL_FRAMES = 60;
+
+// Only ever touched from the video thread.
+std::multimap<u32, PooledBlock> s_pool;
+u64 s_pool_bytes = 0;
+u64 s_pool_frame = 0;
+
+dk::UniqueMemBlock TakeFromPool(u32 size)
+{
+  const auto it = s_pool.find(size);
+  if (it == s_pool.end())
+    return {};
+
+  dk::UniqueMemBlock block = std::move(it->second.block);
+  s_pool.erase(it);
+  s_pool_bytes -= size;
+  return block;
+}
+
+// The block must no longer be referenced by any command buffer the GPU has yet to finish.
+void ReturnToPool(dk::UniqueMemBlock block)
+{
+  const u32 size = block.getSize();
+  if (size > POOL_MAX_BLOCK_BYTES)
+    return;
+
+  s_pool.emplace(size, PooledBlock{std::move(block), s_pool_frame});
+  s_pool_bytes += size;
+
+  // Over budget: let go of whatever has waited longest.
+  while (s_pool_bytes > POOL_MAX_BYTES)
+  {
+    auto oldest = s_pool.begin();
+    for (auto it = s_pool.begin(); it != s_pool.end(); ++it)
+    {
+      if (it->second.returned_on_frame < oldest->second.returned_on_frame)
+        oldest = it;
+    }
+    s_pool_bytes -= oldest->first;
+    s_pool.erase(oldest);
+  }
+}
 }  // namespace
+
+void TrimTextureMemoryPool()
+{
+  if (++s_pool_frame % POOL_TRIM_INTERVAL_FRAMES != 0)
+    return;
+
+  for (auto it = s_pool.begin(); it != s_pool.end();)
+  {
+    if (it->second.returned_on_frame + POOL_MAX_AGE_FRAMES < s_pool_frame)
+    {
+      s_pool_bytes -= it->first;
+      it = s_pool.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+}
+
+void ClearTextureMemoryPool()
+{
+  s_pool.clear();
+  s_pool_bytes = 0;
+}
 
 DKTexture::DKTexture(const TextureConfig& config, dk::UniqueMemBlock memblock,
                      const dk::ImageLayout& layout, const dk::Image& image,
-                     const DkImageDescriptor& descriptor)
+                     const DkImageDescriptor& descriptor, bool recycle_memory)
     : AbstractTexture(config), m_memblock(std::move(memblock)), m_layout(layout), m_image(image),
-      m_descriptor(descriptor)
+      m_recycle_memory(recycle_memory), m_descriptor(descriptor)
 {
 }
 
@@ -87,6 +165,14 @@ DKTexture::~DKTexture()
   // Adopted images do not own their memory, so only the ones that do stop being tracked here.
   if (m_memblock)
     MemoryTracker::Unregister(dkImageGetGpuAddr(&m_image));
+
+  if (m_memblock && m_recycle_memory && g_dk_command_buffer_mgr)
+  {
+    // std::function requires a copyable callable, hence the shared_ptr.
+    auto shared = std::make_shared<dk::UniqueMemBlock>(std::move(m_memblock));
+    g_dk_command_buffer_mgr->DeferCleanup([shared] { ReturnToPool(std::move(*shared)); });
+    return;
+  }
 
   DeferMemBlockDestruction(std::move(m_memblock));
 }
@@ -160,12 +246,22 @@ std::unique_ptr<DKTexture> DKTexture::Create(const TextureConfig& config, std::s
   dk::ImageLayout layout;
   layout_maker.initialize(layout);
 
-  dk::UniqueMemBlock memblock =
-      dk::MemBlockMaker{device, static_cast<u32>(Common::AlignUp(
-                                    layout.getSize(),
-                                    std::max<u64>(layout.getAlignment(), DK_MEMBLOCK_ALIGNMENT)))}
-          .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
-          .create();
+  const u32 memblock_size = static_cast<u32>(Common::AlignUp(
+      layout.getSize(), std::max<u64>(layout.getAlignment(), DK_MEMBLOCK_ALIGNMENT)));
+
+  // Render targets are left out: theirs can carry compression state from the previous image.
+  const bool recycle_memory =
+      !config.IsRenderTarget() && !config.IsComputeImage() && !config.IsMultisampled();
+
+  dk::UniqueMemBlock memblock;
+  if (recycle_memory)
+    memblock = TakeFromPool(memblock_size);
+  if (!memblock)
+  {
+    memblock = dk::MemBlockMaker{device, memblock_size}
+                   .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
+                   .create();
+  }
   if (!memblock)
   {
     ERROR_LOG_FMT(VIDEO, "deko3d: failed to allocate image memory for '{}'", name);
@@ -184,7 +280,8 @@ std::unique_ptr<DKTexture> DKTexture::Create(const TextureConfig& config, std::s
                                       config.height, config.layers, static_cast<int>(config.format),
                                       config.IsRenderTarget()));
 
-  return std::make_unique<DKTexture>(config, std::move(memblock), layout, image, descriptor);
+  return std::make_unique<DKTexture>(config, std::move(memblock), layout, image, descriptor,
+                                     recycle_memory);
 }
 
 std::unique_ptr<DKTexture> DKTexture::CreateAdopted(const TextureConfig& config,

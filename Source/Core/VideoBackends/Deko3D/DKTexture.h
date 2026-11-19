@@ -18,11 +18,20 @@
 
 namespace Deko3D
 {
+// Creating a memory block is a round trip to the GPU driver's service, and a scene change can
+// ask for dozens of textures in one frame. Blocks from destroyed textures are kept for a while
+// and handed to the next texture that needs one of the same size.
+// Call once a frame to let go of blocks nothing has asked for.
+void TrimTextureMemoryPool();
+// Call once the command buffer manager is gone and before the device is.
+void ClearTextureMemoryPool();
+
 class DKTexture final : public AbstractTexture
 {
 public:
   DKTexture(const TextureConfig& config, dk::UniqueMemBlock memblock, const dk::ImageLayout& layout,
-            const dk::Image& image, const DkImageDescriptor& descriptor);
+            const dk::Image& image, const DkImageDescriptor& descriptor,
+            bool recycle_memory = false);
   ~DKTexture() override;
 
   static std::unique_ptr<DKTexture> Create(const TextureConfig& config, std::string_view name);
@@ -56,6 +65,8 @@ private:
   dk::UniqueMemBlock m_memblock;
   dk::ImageLayout m_layout;
   dk::Image m_image;
+  // Whether m_memblock goes back to the pool when this texture dies.
+  bool m_recycle_memory = false;
 
   // Baked sampling descriptor. The state tracker copies this into the frame's descriptor set.
   DkImageDescriptor m_descriptor;
