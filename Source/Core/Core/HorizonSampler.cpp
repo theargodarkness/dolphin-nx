@@ -52,6 +52,7 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/JitCommon/JitCache.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -88,6 +89,10 @@ constexpr std::size_t MIN_SAMPLES = 4 * 1024;
 constexpr std::size_t MAX_REPORTED_BLOCKS = 24;
 constexpr std::size_t MAX_LISTED_BLOCKS = 60;
 constexpr std::size_t MAX_BLOCK_INSTRUCTIONS = 2048;
+// Guest code is listed around the hottest blocks, far enough either side to take in the whole
+// function a hot loop sits in.
+constexpr std::size_t MAX_GUEST_LISTINGS = 10;
+constexpr u32 GUEST_LISTING_BYTES_EACH_WAY = 0x200;
 constexpr std::size_t MAX_LISTED_UNKNOWN = 12;
 constexpr std::size_t MAX_LISTED_LOADERS = 20;
 constexpr std::size_t MAX_REPORTED_LOADERS = 6;
@@ -142,6 +147,10 @@ struct HotBlock
   u64 self = 0;
   u64 inclusive = 0;
   std::vector<std::pair<u32, u64>> instructions;
+  // PowerPC instruction words from guest_listing_start on, with zero for any that could not be
+  // read. Empty unless this is one of the hottest blocks.
+  u32 guest_listing_start = 0;
+  std::vector<u32> guest_listing;
 };
 
 struct BlockLabel
@@ -631,6 +640,24 @@ void ResolveBlocks(Core::System& system)
     }
   }
 
+  std::size_t listings = 0;
+  for (const auto& [range, index] : by_self)
+  {
+    HotBlock& block = s_capture.hot_blocks[index];
+    if (block.self == 0 || block.far_code)
+      continue;
+    if (listings++ == MAX_GUEST_LISTINGS)
+      break;
+
+    block.guest_listing_start = (block.guest_address & ~3u) - GUEST_LISTING_BYTES_EACH_WAY;
+    for (u32 offset = 0; offset < GUEST_LISTING_BYTES_EACH_WAY * 2; offset += sizeof(u32))
+    {
+      const auto word =
+          PowerPC::MMU::HostTryReadInstruction(guard, block.guest_listing_start + offset);
+      block.guest_listing.push_back(word ? word->value : 0);
+    }
+  }
+
   s_capture.blocks_resolved = true;
 }
 
@@ -1004,6 +1031,23 @@ void AppendBlocks(std::string& out, u64 cpu_samples)
     {
       out += fmt::format("  +{:#06x}  {:7}  {:08x}\n", offset, count, encoding);
       offset += sizeof(u32);
+    }
+  }
+
+  for (const HotBlock& block : s_capture.hot_blocks)
+  {
+    if (block.guest_listing.empty())
+      continue;
+
+    out += fmt::format("\nGuest code around block {:08x}, PowerPC instruction words from {:08x}. "
+                       "Zero where memory could not be read.\n",
+                       block.guest_address, block.guest_listing_start);
+    for (std::size_t i = 0; i < block.guest_listing.size(); i += 8)
+    {
+      out += fmt::format("  {:08x} ", block.guest_listing_start + static_cast<u32>(i * 4));
+      for (std::size_t j = i; j < std::min(i + 8, block.guest_listing.size()); ++j)
+        out += fmt::format(" {:08x}", block.guest_listing[j]);
+      out += '\n';
     }
   }
 }
