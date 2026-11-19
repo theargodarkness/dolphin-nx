@@ -523,8 +523,9 @@ void* MemArena::MapInMemoryRegion(s64 offset, size_t size, void* base, bool writ
 
 bool MemArena::ChangeMappingProtection(void* view, size_t size, bool writeable)
 {
+  // Without read-only mappings every mapping is writable already.
   if (!GetSupport().read_only_mappings)
-    return false;
+    return writeable;
 
   const Result result = svcSetMemoryPermission(view, size, writeable ? Perm_Rw : Perm_R);
   if (R_FAILED(result))

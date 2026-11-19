@@ -453,6 +453,12 @@ void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_
                         "region at 0x{:08X} (size 0x{:08X}, logical fastmem region at 0x{:08X}).",
                         intersection_start, mapped_size, logical_address);
         }
+        else if (mapped_size == PowerPC::HW_PAGE_SIZE && logical_size == PowerPC::HW_PAGE_SIZE)
+        {
+          m_page_table_fastmem_flags[logical_address >> PowerPC::HW_PAGE_INDEX_SHIFT] =
+              writeable ? PAGE_TABLE_FASTMEM_READ | PAGE_TABLE_FASTMEM_WRITE :
+                          PAGE_TABLE_FASTMEM_READ;
+        }
       }
     }
     else
@@ -483,6 +489,12 @@ void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_
       }
       m_page_table_mapped_entries.emplace(logical_address,
                                           LogicalMemoryView{mapped_pointer, mapped_size});
+      if (mapped_size == PowerPC::HW_PAGE_SIZE && logical_size == PowerPC::HW_PAGE_SIZE)
+      {
+        m_page_table_fastmem_flags[logical_address >> PowerPC::HW_PAGE_INDEX_SHIFT] =
+            writeable ? PAGE_TABLE_FASTMEM_READ | PAGE_TABLE_FASTMEM_WRITE :
+                        PAGE_TABLE_FASTMEM_READ;
+      }
       m_page_table_mapping_count = m_page_table_mapped_entries.size();
     }
   }
@@ -528,6 +540,7 @@ void MemoryManager::RemoveHostPageTableMapping(u32 logical_address)
   {
     const LogicalMemoryView& entry = it->second;
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
+    m_page_table_fastmem_flags[logical_address >> PowerPC::HW_PAGE_INDEX_SHIFT] = 0;
 
     m_page_table_mapped_entries.erase(it);
     m_page_table_mapping_count = m_page_table_mapped_entries.size();
@@ -539,6 +552,7 @@ void MemoryManager::RemoveAllPageTableMappings()
   for (const auto& [logical_address, entry] : m_page_table_mapped_entries)
   {
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
+    m_page_table_fastmem_flags[logical_address >> PowerPC::HW_PAGE_INDEX_SHIFT] = 0;
   }
   m_page_table_mapped_entries.clear();
   m_page_table_mapping_count = 0;
@@ -636,6 +650,7 @@ void MemoryManager::ShutdownFastmemArena()
   for (const auto& [logical_address, entry] : m_page_table_mapped_entries)
   {
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
+    m_page_table_fastmem_flags[logical_address >> PowerPC::HW_PAGE_INDEX_SHIFT] = 0;
   }
   m_page_table_mapped_entries.clear();
   m_page_table_mapping_count = 0;

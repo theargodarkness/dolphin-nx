@@ -363,7 +363,8 @@ FixupBranch JitArm64::BATAddressLookup(ARM64Reg addr_out, ARM64Reg addr_in, ARM6
 }
 
 FixupBranch JitArm64::CheckIfSafeAddress(Arm64Gen::ARM64Reg addr, Arm64Gen::ARM64Reg tmp1,
-                                         Arm64Gen::ARM64Reg tmp2)
+                                         Arm64Gen::ARM64Reg tmp2, bool check_page_table,
+                                         bool store)
 {
   tmp2 = EncodeRegTo64(tmp2);
 
@@ -371,8 +372,41 @@ FixupBranch JitArm64::CheckIfSafeAddress(Arm64Gen::ARM64Reg addr, Arm64Gen::ARM6
   LSR(tmp1, addr, PowerPC::BAT_INDEX_SHIFT);
   LDR(tmp1, tmp2, ArithOption(tmp1, true));
   FixupBranch pass = TBNZ(tmp1, MathUtil::IntLog2(PowerPC::BAT_PHYSICAL_BIT));
+
+  if (!check_page_table)
+  {
+    FixupBranch fail = B();
+    SetJumpTarget(pass);
+    return fail;
+  }
+
+  // Not block address translated. A page the page table maps into the logical fastmem arena is
+  // as good, as long as data address translation is on and the access stays inside the page: a
+  // fault in here could not be backpatched.
+  const ARM64Reg tmp1_32 = EncodeRegTo32(tmp1);
+  const ARM64Reg addr_32 = EncodeRegTo32(addr);
+  constexpr u32 LONGEST_ACCESS = 32;
+
+  static_assert(FEATURE_FLAG_MSR_DR == 1 << 0);
+  LDR(IndexType::Unsigned, tmp1_32, PPC_REG, PPCSTATE_OFF(feature_flags));
+  FixupBranch real_mode = TBZ(tmp1_32, 0);
+
+  MOVP2R(tmp2, m_system.GetMemory().GetPageTableFastmemFlags());
+  LSR(tmp1_32, addr_32, PowerPC::HW_PAGE_INDEX_SHIFT);
+  LDRB(tmp1_32, tmp2, ArithOption(tmp1_32));
+  static_assert(Memory::MemoryManager::PAGE_TABLE_FASTMEM_READ == 1 << 0);
+  static_assert(Memory::MemoryManager::PAGE_TABLE_FASTMEM_WRITE == 1 << 1);
+  FixupBranch not_mapped = TBZ(tmp1_32, store ? 1 : 0);
+
+  ANDI2R(tmp1_32, addr_32, PowerPC::HW_PAGE_SIZE - 1, EncodeRegTo32(tmp2));
+  CMPI2R(tmp1_32, PowerPC::HW_PAGE_SIZE - LONGEST_ACCESS, EncodeRegTo32(tmp2));
+  FixupBranch page_table_pass = B(CCFlags::CC_LS);
+
+  SetJumpTarget(real_mode);
+  SetJumpTarget(not_mapped);
   FixupBranch fail = B();
   SetJumpTarget(pass);
+  SetJumpTarget(page_table_pass);
   return fail;
 }
 

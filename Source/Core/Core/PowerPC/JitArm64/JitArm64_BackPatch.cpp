@@ -99,7 +99,8 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
       const ARM64Reg temp1 = flags & BackPatchInfo::FLAG_STORE ? ARM64Reg::W1 : ARM64Reg::W3;
       const ARM64Reg temp2 = ARM64Reg::W0;
 
-      slow_access_fixup = CheckIfSafeAddress(addr, temp1, temp2);
+      slow_access_fixup = CheckIfSafeAddress(addr, temp1, temp2, true,
+                                             (flags & BackPatchInfo::FLAG_STORE) != 0);
     }
 
     if ((flags & BackPatchInfo::FLAG_STORE) && (flags & BackPatchInfo::FLAG_FLOAT))
