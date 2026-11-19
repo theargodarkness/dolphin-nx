@@ -1364,7 +1364,7 @@ std::string DescribeEmulation(Core::System& system)
   out += fmt::format("hacks: skip EFB access {}, EFB copies to texture only {}, defer EFB copies "
                      "{}, XFB copies to texture only {}, immediate XFB {}, ignore format changes "
                      "{}, bounding box {}, VBI skip {}, CPU cull {}, shared texture memory {}, EFB VRAM "
-                     "copies {}\n",
+                     "copies {}, triple buffering {}\n",
                      OnOff(!Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE)),
                      OnOff(Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM)),
                      OnOff(Config::Get(Config::GFX_HACK_DEFER_EFB_COPIES)),
@@ -1375,7 +1375,8 @@ std::string DescribeEmulation(Core::System& system)
                      OnOff(Config::Get(Config::GFX_HACK_VI_SKIP)),
                      OnOff(Config::Get(Config::GFX_CPU_CULL)),
                      OnOff(Config::Get(Config::GFX_HACK_SHARED_TEXTURE_MEMORY)),
-                     OnOff(!Config::Get(Config::GFX_HACK_DISABLE_COPY_TO_VRAM)));
+                     OnOff(!Config::Get(Config::GFX_HACK_DISABLE_COPY_TO_VRAM)),
+                     OnOff(Config::Get(Config::GFX_HACK_TRIPLE_BUFFERING)));
   return out;
 }
 

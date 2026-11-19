@@ -11,6 +11,8 @@
 #include "Common/Align.h"
 #include "Common/Logging/Log.h"
 
+#include "Core/Config/GraphicsSettings.h"
+
 #include "VideoBackends/Deko3D/DKContext.h"
 #include "VideoBackends/Deko3D/DKMemoryTracker.h"
 #include "VideoBackends/Deko3D/DKTexture.h"
@@ -46,6 +48,7 @@ bool DKSwapChain::Initialize()
   }
   m_width = width;
   m_height = height;
+  m_num_images = Config::Get(Config::GFX_HACK_TRIPLE_BUFFERING) ? NUM_IMAGES : 2;
 
   dk::ImageLayout layout;
   dk::ImageLayoutMaker{device}
@@ -59,7 +62,7 @@ bool DKSwapChain::Initialize()
   const u64 aligned_size = Common::AlignUp(image_size, image_align);
 
   m_image_memblock =
-      dk::MemBlockMaker{device, static_cast<u32>(Common::AlignUp(aligned_size * NUM_IMAGES,
+      dk::MemBlockMaker{device, static_cast<u32>(Common::AlignUp(aligned_size * m_num_images,
                                                                  DK_MEMBLOCK_ALIGNMENT))}
           .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
           .create();
@@ -73,7 +76,7 @@ bool DKSwapChain::Initialize()
                              AbstractTextureFlag_RenderTarget, AbstractTextureType::Texture_2D);
 
   std::array<DkImage const*, NUM_IMAGES> image_ptrs;
-  for (u32 i = 0; i < NUM_IMAGES; ++i)
+  for (u32 i = 0; i < m_num_images; ++i)
   {
     m_images[i].initialize(layout, m_image_memblock, static_cast<u32>(aligned_size * i));
     image_ptrs[i] = &m_images[i];
@@ -90,7 +93,7 @@ bool DKSwapChain::Initialize()
     }
   }
 
-  m_swapchain = dk::SwapchainMaker{device, m_native_window, image_ptrs}.create();
+  m_swapchain = dk::SwapchainMaker{device, m_native_window, image_ptrs.data(), m_num_images}.create();
   if (!m_swapchain)
   {
     ERROR_LOG_FMT(VIDEO, "deko3d: failed to create swapchain");
@@ -106,8 +109,11 @@ void DKSwapChain::Destroy()
   if (g_dk_context)
     g_dk_context->WaitIdle();
   m_swapchain = nullptr;
-  for (const dk::Image& image : m_images)
-    MemoryTracker::Unregister(dkImageGetGpuAddr(&image));
+  for (u32 i = 0; i < m_num_images; ++i)
+  {
+    if (m_textures[i])
+      MemoryTracker::Unregister(dkImageGetGpuAddr(&m_images[i]));
+  }
   for (auto& framebuffer : m_framebuffers)
     framebuffer.reset();
   for (auto& texture : m_textures)
