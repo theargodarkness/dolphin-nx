@@ -944,6 +944,14 @@ void BuildEmulation(PageBuilder& page)
   page.Toggle("Dual core", Config::MAIN_CPU_THREAD);
   page.Note("Runs the emulated GPU on its own core. Turning it off is much slower, but can fix "
             "some crashes.");
+  if (!page.IsPerGame())
+  {
+    page.Toggle("Dual core in games that default to single core",
+                Config::MAIN_OVERRIDE_SINGLE_CORE_GAMES);
+    page.Note("About a hundred games ship set to single core because dual core can hang or "
+              "glitch in them. This ignores that and is far faster where it works. If a game "
+              "misbehaves, turn Dual core off in that game's own settings.");
+  }
   const std::vector<std::string> clock_labels = {"Off",  "50%",  "75%",  "90%",
                                                  "110%", "125%", "150%", "200%"};
   const std::vector<float> clock_factors = {0.5f, 0.75f, 0.9f, 1.1f, 1.25f, 1.5f, 2.0f};

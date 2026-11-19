@@ -63,6 +63,14 @@ constexpr bool DEFAULT_CPU_THREAD = true;
 constexpr bool DEFAULT_CPU_THREAD = false;
 #endif
 const Info<bool> MAIN_CPU_THREAD{{System::Main, "Core", "CPUThread"}, DEFAULT_CPU_THREAD};
+#ifdef __SWITCH__
+// One core cannot carry both the emulated CPU and GPU at Switch clock speeds.
+constexpr bool DEFAULT_OVERRIDE_SINGLE_CORE_GAMES = true;
+#else
+constexpr bool DEFAULT_OVERRIDE_SINGLE_CORE_GAMES = false;
+#endif
+const Info<bool> MAIN_OVERRIDE_SINGLE_CORE_GAMES{{System::Main, "Core", "OverrideSingleCoreGames"},
+                                                 DEFAULT_OVERRIDE_SINGLE_CORE_GAMES};
 const Info<bool> MAIN_LOAD_GAME_INTO_MEMORY{{System::Main, "Core", "LoadGameIntoMemory"}, false};
 const Info<bool> MAIN_SYNC_ON_SKIP_IDLE{{System::Main, "Core", "SyncOnSkipIdle"}, true};
 const Info<std::string> MAIN_DEFAULT_ISO{{System::Main, "Core", "DefaultISO"}, ""};

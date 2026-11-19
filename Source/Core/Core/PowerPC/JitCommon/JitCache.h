@@ -130,6 +130,13 @@ public:
   static constexpr u32 FAST_BLOCK_MAP_FALLBACK_ELEMENTS = 0x10000;
   static constexpr u32 FAST_BLOCK_MAP_FALLBACK_MASK = FAST_BLOCK_MAP_FALLBACK_ELEMENTS - 1;
 
+  // The entry point directory covers the same index space as the large map, split into pages
+  // that are only allocated once a block lands in them. One page spans 64 KiB of guest code.
+  static constexpr u32 ENTRY_POINT_PAGE_BITS = 14;
+  static constexpr size_t ENTRY_POINT_PAGE_ELEMENTS = size_t{1} << ENTRY_POINT_PAGE_BITS;
+  static constexpr size_t ENTRY_POINT_DIRECTORY_ELEMENTS = FAST_BLOCK_MAP_SIZE / sizeof(u8*) /
+                                                           ENTRY_POINT_PAGE_ELEMENTS;
+
   explicit JitBaseBlockCache(JitBase& jit);
   virtual ~JitBaseBlockCache();
 
@@ -141,6 +148,9 @@ public:
 
   // Code Cache
   u8** GetEntryPoints();
+  // Null unless the entry point directory is in use. Every element points to a page of
+  // ENTRY_POINT_PAGE_ELEMENTS entry points, so a lookup never has to check a page for null.
+  u8*** GetEntryPointDirectory();
   JitBlock** GetFastBlockMapFallback();
   void RunOnBlocks(const Core::CPUThreadGuard& guard,
                    const std::function<void(const JitBlock&)>& f) const;
@@ -213,6 +223,18 @@ private:
   // know where to jump based on pc and msr bits.
   Common::LazyMemoryRegion m_entry_points_arena;
   u8** m_entry_points_ptr = nullptr;
+
+  // The large map needs far more address space than Horizon will hand out, and the fallback map
+  // below thrashes once a game has more than a few hundred KiB of code. This gives the dispatcher
+  // the same exact lookup as the large map for two loads.
+  std::unique_ptr<u8**[]> m_entry_point_directory;
+  std::unique_ptr<u8*[]> m_empty_entry_point_page;
+  std::vector<std::unique_ptr<u8*[]>> m_entry_point_pages;
+
+  bool UsesEntryPoints() const { return m_entry_points_ptr || m_entry_point_directory; }
+  u8* GetEntryPoint(size_t index) const;
+  void SetEntryPoint(size_t index, u8* entry_point);
+  void ClearEntryPoints();
 
   // An alternative for the above but without a shm segment
   // in case the shm memory region couldn't be allocated.
