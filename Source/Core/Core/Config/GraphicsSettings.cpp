@@ -212,7 +212,6 @@ const Info<bool> GFX_HACK_FORCE_PROGRESSIVE{{System::GFX, "Hacks", "ForceProgres
 const Info<bool> GFX_HACK_SKIP_EFB_COPY_TO_RAM{{System::GFX, "Hacks", "EFBToTextureEnable"}, true};
 const Info<bool> GFX_HACK_SHARED_TEXTURE_MEMORY{{System::GFX, "Hacks", "SharedTextureMemory"},
                                                  true};
-const Info<bool> GFX_HACK_TRIPLE_BUFFERING{{System::GFX, "Hacks", "TripleBuffering"}, true};
 const Info<bool> GFX_HACK_SKIP_XFB_COPY_TO_RAM{{System::GFX, "Hacks", "XFBToTextureEnable"}, true};
 const Info<bool> GFX_HACK_DISABLE_COPY_TO_VRAM{{System::GFX, "Hacks", "DisableCopyToVRAM"}, false};
 const Info<bool> GFX_HACK_DEFER_EFB_COPIES{{System::GFX, "Hacks", "DeferEFBCopies"}, true};

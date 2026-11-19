@@ -27,7 +27,6 @@ public:
   // deko3d makes the GPU wait for that. A frame that takes the GPU a little over one refresh then
   // costs two, so anything heavier than 16.7 ms dropped a game from 60 to 30 frames a second with
   // the GPU and both emulation threads half idle. The third image is free whenever that happens.
-  // This is the most there can be. The triple buffering setting decides between it and two.
   static constexpr u32 NUM_IMAGES = 3;
   static constexpr DkImageFormat FORMAT = DkImageFormat_RGBA8_Unorm;
 
@@ -61,7 +60,6 @@ private:
   u32 m_height = 0;
 
   dk::UniqueMemBlock m_image_memblock;
-  u32 m_num_images = NUM_IMAGES;
   std::array<dk::Image, NUM_IMAGES> m_images;
   std::array<std::unique_ptr<DKTexture>, NUM_IMAGES> m_textures;
   std::array<std::unique_ptr<DKFramebuffer>, NUM_IMAGES> m_framebuffers;

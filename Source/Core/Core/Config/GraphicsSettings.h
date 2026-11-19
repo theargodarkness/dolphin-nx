@@ -185,7 +185,6 @@ extern const Info<bool> GFX_HACK_BBOX_ENABLE;
 extern const Info<bool> GFX_HACK_FORCE_PROGRESSIVE;
 extern const Info<bool> GFX_HACK_SKIP_EFB_COPY_TO_RAM;
 extern const Info<bool> GFX_HACK_SHARED_TEXTURE_MEMORY;
-extern const Info<bool> GFX_HACK_TRIPLE_BUFFERING;
 extern const Info<bool> GFX_HACK_SKIP_XFB_COPY_TO_RAM;
 extern const Info<bool> GFX_HACK_DISABLE_COPY_TO_VRAM;
 extern const Info<bool> GFX_HACK_DEFER_EFB_COPIES;

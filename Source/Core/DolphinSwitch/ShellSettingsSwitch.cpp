@@ -825,7 +825,6 @@ void BuildHacks(PageBuilder& page)
   page.Toggle("Fast texture sampling", Config::GFX_HACK_FAST_TEXTURE_SAMPLING);
   page.Toggle("Save texture cache to state", Config::GFX_SAVE_TEXTURE_CACHE_TO_STATE);
   page.Toggle("Shared texture memory", Config::GFX_HACK_SHARED_TEXTURE_MEMORY);
-  page.Toggle("Triple buffering", Config::GFX_HACK_TRIPLE_BUFFERING);
   page.Toggle("Cull vertices on the CPU", Config::GFX_CPU_CULL);
   page.Note("Saving the texture cache makes save states larger, but keeps some games from "
             "drawing stale textures after loading one.");
