@@ -137,6 +137,8 @@ struct Bucket
   s64 emulated_ticks = 0;
   u64 gpu_busy_ns = 0;
   u64 presents = 0;
+  // How many samples had been taken when this bucket closed.
+  std::size_t sample_count = 0;
   std::array<u64, MAX_THREADS> thread_ticks{};
 };
 
@@ -438,6 +440,7 @@ void RecordBucket()
     bucket.emulated_ticks = __atomic_load_n(s_capture.global_timer, __ATOMIC_RELAXED);
   bucket.gpu_busy_ns = g_stats.gpu_busy_ns_total.load(std::memory_order_relaxed);
   bucket.presents = g_stats.presents_total.load(std::memory_order_relaxed);
+  bucket.sample_count = s_capture.sample_count;
 
   for (std::size_t i = 0; i < MAX_THREADS; ++i)
   {
@@ -915,6 +918,82 @@ void AppendTimeline(std::string& out, const std::vector<std::size_t>& order)
   }
 }
 
+// A stall of a fraction of a second vanishes in the whole-capture totals. This lists where the
+// busiest threads were during the slowest row of the timeline only.
+void AppendSlowestBucket(std::string& out, const std::vector<std::size_t>& order)
+{
+  if (s_capture.ticks_per_second == 0 || s_capture.buckets.size() < 3)
+    return;
+
+  std::size_t slowest = 0;
+  double slowest_speed = 0.0;
+  // The first row is skipped: it absorbs whatever built up while the pause menu was open.
+  for (std::size_t b = 2; b < s_capture.buckets.size(); ++b)
+  {
+    const Bucket& previous = s_capture.buckets[b - 1];
+    const Bucket& bucket = s_capture.buckets[b];
+    const double wall = TicksToSeconds(bucket.wall_ticks - previous.wall_ticks);
+    if (wall <= 0.0 || bucket.sample_count <= previous.sample_count)
+      continue;
+
+    const double speed = static_cast<double>(bucket.emulated_ticks - previous.emulated_ticks) /
+                         s_capture.ticks_per_second / wall;
+    if (slowest == 0 || speed < slowest_speed)
+    {
+      slowest = b;
+      slowest_speed = speed;
+    }
+  }
+  if (slowest == 0)
+    return;
+
+  const std::size_t first = s_capture.buckets[slowest - 1].sample_count;
+  const std::size_t last = std::min(s_capture.buckets[slowest].sample_count, Samples().size());
+  const double end_time = TicksToSeconds(s_capture.buckets[slowest].wall_ticks -
+                                         s_capture.buckets.front().wall_ticks);
+
+  out += fmt::format("\nSlowest row of the timeline: t = {:.2f}, speed {:.0f}%. Stacks from that "
+                     "row only, for the busiest threads.\n",
+                     end_time, slowest_speed * 100.0);
+
+  constexpr std::size_t MAX_THREADS_LISTED = 5;
+  constexpr std::size_t MAX_STACKS_LISTED = 12;
+  for (std::size_t column = 0; column < std::min(order.size(), MAX_THREADS_LISTED); ++column)
+  {
+    std::map<std::string, u64> stacks;
+    u64 total = 0;
+    for (std::size_t i = first; i < last; ++i)
+    {
+      const Sample& sample = Samples()[i];
+      if (sample.thread != order[column])
+        continue;
+      ++total;
+
+      std::string key = sample.blocked ? fmt::format("svc:{:x}", sample.svc) : "run";
+      key += ' ';
+      key += Label(sample.pc);
+      if (KeepLinkRegister(sample))
+        key += " L" + Label(sample.lr);
+      for (u8 frame = 0; frame < sample.depth; ++frame)
+        key += ' ' + Label(sample.frames[frame]);
+      ++stacks[std::move(key)];
+    }
+    if (total == 0)
+      continue;
+
+    std::vector<std::pair<std::string_view, u64>> by_count(stacks.begin(), stacks.end());
+    std::sort(by_count.begin(), by_count.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    if (by_count.size() > MAX_STACKS_LISTED)
+      by_count.resize(MAX_STACKS_LISTED);
+
+    out += fmt::format("  T{}: {} ({} samples)\n", column,
+                       s_capture.threads[order[column]].info.name.data(), total);
+    for (const auto& [key, count] : by_count)
+      out += fmt::format("    {} {}\n", count, key);
+  }
+}
+
 void AppendThread(std::string& out, std::size_t index, std::size_t column)
 {
   const ThreadRecord& thread = s_capture.threads[index];
@@ -1156,6 +1235,7 @@ std::string BuildReport()
   std::string out;
   AppendSummary(out, order, sample_counts, blocked_counts);
   AppendTimeline(out, order);
+  AppendSlowestBucket(out, order);
 
   for (std::size_t column = 0; column < order.size(); ++column)
   {
