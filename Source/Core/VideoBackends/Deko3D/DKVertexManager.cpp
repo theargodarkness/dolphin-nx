@@ -81,8 +81,19 @@ bool DKVertexManager::Initialize()
 
 void DKVertexManager::ResetBuffer(u32 vertex_stride)
 {
+  // A draw command carries at most 65535 vertices, and everything written before the next reset
+  // has this stride, so this is all that the first command after a reset can need. Later ones are
+  // checked against what is left and flush if they don't fit. Reserving MAXVBUFFERSIZE instead,
+  // which is sized for the largest vertex there can be, kept a third of the stream buffer out of
+  // use at any time, and with a game that sends 4 MiB of vertices a frame the rest was not enough
+  // for the frames the GPU had yet to draw: the video thread spent a fifth of its time waiting.
+  constexpr u32 MOST_VERTICES_PER_COMMAND = 65535;
+  const u32 vertex_reservation =
+      std::min<u32>(MAXVBUFFERSIZE,
+                    Common::AlignUp(MOST_VERTICES_PER_COMMAND * vertex_stride + 4, 4096u));
+
   bool has_vbuffer_allocation =
-      m_vertex_stream_buffer->ReserveMemory(MAXVBUFFERSIZE, vertex_stride);
+      m_vertex_stream_buffer->ReserveMemory(vertex_reservation, vertex_stride);
   bool has_ibuffer_allocation =
       m_index_stream_buffer->ReserveMemory(MAXIBUFFERSIZE * sizeof(u16), sizeof(u16));
   if (!has_vbuffer_allocation || !has_ibuffer_allocation)
@@ -92,7 +103,10 @@ void DKVertexManager::ResetBuffer(u32 vertex_stride)
     DKGfx::GetInstance()->ExecuteCommandBuffer(false);
 
     if (!has_vbuffer_allocation)
-      has_vbuffer_allocation = m_vertex_stream_buffer->ReserveMemory(MAXVBUFFERSIZE, vertex_stride);
+    {
+      has_vbuffer_allocation =
+          m_vertex_stream_buffer->ReserveMemory(vertex_reservation, vertex_stride);
+    }
     if (!has_ibuffer_allocation)
     {
       has_ibuffer_allocation =
@@ -104,7 +118,7 @@ void DKVertexManager::ResetBuffer(u32 vertex_stride)
   }
 
   m_base_buffer_pointer = m_vertex_stream_buffer->GetHostPointer();
-  m_end_buffer_pointer = m_vertex_stream_buffer->GetCurrentHostPointer() + MAXVBUFFERSIZE;
+  m_end_buffer_pointer = m_vertex_stream_buffer->GetCurrentHostPointer() + vertex_reservation;
   m_cur_buffer_pointer = m_vertex_stream_buffer->GetCurrentHostPointer();
   m_index_generator.Start(reinterpret_cast<u16*>(m_index_stream_buffer->GetCurrentHostPointer()));
 }
