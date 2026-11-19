@@ -104,6 +104,32 @@ bool DKStreamBuffer::ReserveMemory(u32 num_bytes, u32 alignment)
     }
   }
 
+  // Before waiting for the GPU, find out how far it has really got. The position above is only
+  // as fresh as the last submission.
+  g_dk_command_buffer_mgr->PollCompletedFences();
+  UpdateGPUPosition();
+  if (m_current_offset >= m_current_gpu_position)
+  {
+    if (required_bytes <= m_size - m_current_offset)
+    {
+      m_current_offset = Common::AlignUp(m_current_offset, alignment);
+      m_last_allocation_size = num_bytes;
+      return true;
+    }
+    if (required_bytes < m_current_gpu_position)
+    {
+      m_current_offset = 0;
+      m_last_allocation_size = num_bytes;
+      return true;
+    }
+  }
+  else if (required_bytes < m_current_gpu_position - m_current_offset)
+  {
+    m_current_offset = Common::AlignUp(m_current_offset, alignment);
+    m_last_allocation_size = num_bytes;
+    return true;
+  }
+
   // Can we find a fence to wait on that will give us enough memory?
   if (WaitForClearSpace(required_bytes))
   {
