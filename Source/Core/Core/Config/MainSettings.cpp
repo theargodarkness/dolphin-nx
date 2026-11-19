@@ -243,6 +243,7 @@ const Info<bool> MAIN_FLOAT_EXCEPTIONS{{System::Main, "Core", "FloatExceptions"}
 const Info<bool> MAIN_DIVIDE_BY_ZERO_EXCEPTIONS{{System::Main, "Core", "DivByZeroExceptions"},
                                                 false};
 const Info<bool> MAIN_FPRF{{System::Main, "Core", "FPRF"}, false};
+const Info<bool> MAIN_JIT_NATIVE_SQRT{{System::Main, "Core", "JITNativeSqrt"}, true};
 const Info<bool> MAIN_ACCURATE_NANS{{System::Main, "Core", "AccurateNaNs"}, false};
 const Info<bool> MAIN_ACCURATE_FMADDS{{System::Main, "Core", "AccurateFmadds"}, true};
 const Info<bool> MAIN_DISABLE_ICACHE{{System::Main, "Core", "DisableICache"}, false};

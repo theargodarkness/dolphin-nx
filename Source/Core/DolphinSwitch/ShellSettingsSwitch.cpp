@@ -979,6 +979,7 @@ void BuildEmulation(PageBuilder& page)
   page.Toggle("Enable MMU", Config::MAIN_MMU);
   page.Toggle("Accurate CPU cache", Config::MAIN_ACCURATE_CPU_CACHE);
   page.Toggle("Enable FPRF", Config::MAIN_FPRF);
+  page.Toggle("Native square root", Config::MAIN_JIT_NATIVE_SQRT);
   page.Toggle("Accurate NaNs", Config::MAIN_ACCURATE_NANS);
   page.Toggle("Synchronise GPU thread", Config::MAIN_SYNC_GPU);
   page.Toggle("Synchronise on idle skipping", Config::MAIN_SYNC_ON_SKIP_IDLE);

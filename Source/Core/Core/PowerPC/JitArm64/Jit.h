@@ -334,6 +334,9 @@ protected:
   void GenerateConvertSingleToDouble();
   void GenerateFPRF(bool single);
   void GenerateResolveLazyFPRF();
+
+  // Emits a shortcut at the start of a block that begins a known software square root routine.
+  void EmitNativeSqrt(u32 em_address);
   void GenerateFmaddsEft();
   void GeneratePsMaddEft();
   void GenerateQuantizedLoads();

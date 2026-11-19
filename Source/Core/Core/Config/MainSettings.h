@@ -136,6 +136,8 @@ extern const Info<bool> MAIN_LOW_DCBZ_HACK;
 extern const Info<bool> MAIN_FLOAT_EXCEPTIONS;
 extern const Info<bool> MAIN_DIVIDE_BY_ZERO_EXCEPTIONS;
 extern const Info<bool> MAIN_FPRF;
+// Lets JitArm64 answer a game's software square root routine with the host's instruction.
+extern const Info<bool> MAIN_JIT_NATIVE_SQRT;
 extern const Info<bool> MAIN_ACCURATE_NANS;
 extern const Info<bool> MAIN_ACCURATE_FMADDS;
 extern const Info<bool> MAIN_DISABLE_ICACHE;
