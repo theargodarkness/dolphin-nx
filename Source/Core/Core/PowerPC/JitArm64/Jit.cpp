@@ -1404,8 +1404,6 @@ bool JitArm64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
   if (IsProfilingEnabled())
     ABI_CallFunction(&JitBlock::ProfileData::BeginProfiling, b->profile_data.get());
 
-  EmitNativeSqrt(em_address);
-
   if (code_block.m_gqr_used.Count() == 1 &&
       !js.pairedQuantizeAddresses.TestBit(js.blockStart / sizeof(UGeckoInstruction)))
   {
@@ -1607,6 +1605,8 @@ bool JitArm64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
 
         js.firstFPInstructionFound = true;
       }
+
+      EmitNativeSqrt(i);
 
       if (bJITRegisterCacheOff)
       {

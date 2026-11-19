@@ -335,8 +335,9 @@ protected:
   void GenerateFPRF(bool single);
   void GenerateResolveLazyFPRF();
 
-  // Emits a shortcut at the start of a block that begins a known software square root routine.
-  void EmitNativeSqrt(u32 em_address);
+  // Emits a shortcut ahead of the instruction at op_index if a known software square root
+  // routine starts there.
+  void EmitNativeSqrt(u32 op_index);
   void GenerateFmaddsEft();
   void GeneratePsMaddEft();
   void GenerateQuantizedLoads();

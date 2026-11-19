@@ -10,6 +10,7 @@
 #include "Core/PowerPC/Gekko.h"
 #include "Core/PowerPC/JitArm64/JitArm64_RegCache.h"
 #include "Core/PowerPC/MMU.h"
+#include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PowerPC.h"
 
 using namespace Arm64Gen;
@@ -66,16 +67,20 @@ bool IsMasked(size_t index)
 }
 }  // namespace
 
-void JitArm64::EmitNativeSqrt(u32 em_address)
+void JitArm64::EmitNativeSqrt(u32 op_index)
 {
+  const PPCAnalyst::CodeOp& op = m_code_buffer[op_index];
+  if (op.inst.hex != SQRT_ROUTINE[0])
+    return;
+
   // The routine leaves FPSCR's compare bits in a particular state, which only matters if they are
   // being emulated.
-  if (!m_native_sqrt || m_fprf || jo.fp_exceptions || IsDebuggingEnabled())
+  if (!m_native_sqrt || m_fprf || jo.fp_exceptions || IsDebuggingEnabled() || bJITRegisterCacheOff)
     return;
 
   for (size_t i = 0; i < SQRT_ROUTINE.size(); ++i)
   {
-    const auto word = m_mmu.TryReadInstruction(em_address + static_cast<u32>(i * sizeof(u32)));
+    const auto word = m_mmu.TryReadInstruction(op.address + static_cast<u32>(i * sizeof(u32)));
     if (!word.valid)
       return;
     const u32 mask = IsMasked(i) ? 0xFFFF0000 : 0xFFFFFFFF;
@@ -83,37 +88,75 @@ void JitArm64::EmitNativeSqrt(u32 em_address)
       return;
   }
 
-  // The routine and the host agree exactly on every positive normal number when rounding to
-  // nearest. Everything else takes the routine itself, which follows this: zeroes, denormals,
-  // negative numbers, infinities and NaNs (some of which set errno), other rounding modes, and
-  // the floating point unavailable exception that the OS uses to switch FPU contexts lazily.
-  // Nothing is cached in host registers this early in a block.
-  LDR(IndexType::Unsigned, ARM64Reg::W1, PPC_REG, PPCSTATE_OFF(msr));
-  FixupBranch fp_unavailable = TBZ(ARM64Reg::W1, 13);
+  // Calls are usually compiled into the caller's block, so this is rarely the start of one. Work
+  // out, the way the analyzer does, whether a call earlier in this block is the one to return
+  // from, and whether it was paired with a return further on. A paired call pushed nothing for
+  // the BLR optimization, so the shortcut must not pop anything either.
+  int caller = -1;
+  for (u32 j = 0; j < op_index; ++j)
+  {
+    const UGeckoInstruction inst = m_code_buffer[j].inst;
+    const bool unconditional_bc = inst.OPCD == 16 && (inst.BO & BO_DONT_DECREMENT_FLAG) &&
+                                  (inst.BO & BO_DONT_CHECK_CONDITION);
+    if ((inst.OPCD == 18 || unconditional_bc) && inst.LK)
+      caller = static_cast<int>(j);
+    else if (inst.OPCD == 19 && inst.SUBOP10 == 16 && !inst.LK && m_code_buffer[j].skip)
+      caller = -1;
+    else if (inst.OPCD == 31 && inst.SUBOP10 == 467 &&
+             ((inst.SPRU << 5) | (inst.SPRL & 0x1F)) == SPR_LR)
+      caller = -1;
+  }
+  const bool return_is_known = caller >= 0 && m_code_buffer[caller].skipLRStack;
 
-  LDR(IndexType::Unsigned, ARM64Reg::X0, PPC_REG, PPCSTATE_OFF_PS0(1));
-  LSR(ARM64Reg::X1, ARM64Reg::X0, 52);
-  SUB(ARM64Reg::W1, ARM64Reg::W1, 1);
-  CMP(ARM64Reg::W1, 0x7FE);
+  // The compare below would lose a carry kept in the host flags.
+  FlushGatherPipePtr();
+  FlushCarry();
+
+  // Everything that can change what is cached where happens before the first branch, so the
+  // routine that follows sees the same state whether or not the shortcut was considered.
+  const auto WA = gpr.GetScopedReg();
+  const auto WB = gpr.GetScopedReg();
+  const auto V0 = fpr.GetScopedReg();
+  const ARM64Reg XA = EncodeRegTo64(WA);
+  const ARM64Reg XB = EncodeRegTo64(WB);
+  const ARM64Reg VA = fpr.R(1, RegType::LowerPair);
+
+  // The routine and the host agree exactly on every positive normal number when rounding to
+  // nearest. Everything else takes the routine itself: zeroes, denormals, negative numbers,
+  // infinities and NaNs (some of which set errno), other rounding modes, and the floating point
+  // unavailable exception that the OS uses to switch FPU contexts lazily.
+  m_float_emit.FMOV(XA, EncodeRegToDouble(VA));
+  LSR(XB, XA, 52);
+  SUB(WB, WB, 1);
+  CMP(WB, 0x7FE);
   FixupBranch not_positive_normal = B(CC_HS);
 
-  LDR(IndexType::Unsigned, ARM64Reg::W1, PPC_REG, PPCSTATE_OFF(fpscr));
-  TST(ARM64Reg::W1, LogicalImm(3, GPRSize::B32));
+  LDR(IndexType::Unsigned, WB, PPC_REG, PPCSTATE_OFF(fpscr));
+  TST(WB, LogicalImm(3, GPRSize::B32));
   FixupBranch not_round_to_nearest = B(CC_NEQ);
 
-  m_float_emit.FMOV(ARM64Reg::D0, ARM64Reg::X0);
-  m_float_emit.FSQRT(ARM64Reg::D0, ARM64Reg::D0);
-  m_float_emit.STR(64, IndexType::Unsigned, ARM64Reg::D0, PPC_REG, PPCSTATE_OFF_PS0(1));
+  LDR(IndexType::Unsigned, WB, PPC_REG, PPCSTATE_OFF(msr));
+  FixupBranch fp_unavailable = TBZ(WB, 13);
 
-  // Return to the caller the way blr would.
-  LDR(IndexType::Unsigned, DISPATCHER_PC, PPC_REG, PPCSTATE_OFF_SPR(SPR_LR));
-  AND(DISPATCHER_PC, DISPATCHER_PC, LogicalImm(~0x3, GPRSize::B32));
+  m_float_emit.FSQRT(EncodeRegToDouble(V0), EncodeRegToDouble(VA));
 
-  js.downcountAmount = SQRT_ROUTINE_CYCLES;
-  WriteBLRExit(DISPATCHER_PC);
-  js.downcountAmount = 0;
+  if (!return_is_known)
+    LoadBranchTargetFromSPR(WA, SPR_LR);
 
-  SetJumpTarget(fp_unavailable);
+  // Leave the way a conditional branch does, then put the result where f1 lives.
+  gpr.Flush(FlushMode::MaintainState, WB);
+  fpr.Flush(FlushMode::MaintainState, ARM64Reg::INVALID_REG);
+  m_float_emit.STR(64, IndexType::Unsigned, EncodeRegToDouble(V0), PPC_REG, PPCSTATE_OFF_PS0(1));
+
+  const u32 downcount_so_far = js.downcountAmount;
+  js.downcountAmount += SQRT_ROUTINE_CYCLES - op.opinfo->num_cycles;
+  if (return_is_known)
+    WriteExit(m_code_buffer[caller].address + 4);
+  else
+    WriteBLRExit(WA);
+  js.downcountAmount = downcount_so_far;
+
   SetJumpTarget(not_positive_normal);
   SetJumpTarget(not_round_to_nearest);
+  SetJumpTarget(fp_unavailable);
 }
