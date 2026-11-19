@@ -1344,9 +1344,11 @@ std::string DescribeEmulation(Core::System& system)
                      100.0f * Config::Get(Config::MAIN_EMULATION_SPEED),
                      OnOff(Config::Get(Config::MAIN_ENABLE_CHEATS)));
 
-  out += fmt::format("fastmem {}, page table fastmem {}, arena {}\n",
+  out += fmt::format("fastmem {}, page table fastmem {} ({} pages mapped{}), arena {}\n",
                      OnOff(Config::Get(Config::MAIN_FASTMEM)),
                      OnOff(Config::Get(Config::MAIN_PAGE_TABLE_FASTMEM)),
+                     system.GetMemory().GetPageTableMappingCount(),
+                     Memory::MemoryManager::SupportsReadOnlyMappings() ? "" : ", marked changed",
                      system.GetMemory().GetLogicalBase() != nullptr ? "mapped" : "not mapped");
 
   const int efb_scale = Config::Get(Config::GFX_EFB_SCALE);
@@ -1361,7 +1363,7 @@ std::string DescribeEmulation(Core::System& system)
 
   out += fmt::format("hacks: skip EFB access {}, EFB copies to texture only {}, defer EFB copies "
                      "{}, XFB copies to texture only {}, immediate XFB {}, ignore format changes "
-                     "{}, bounding box {}, VBI skip {}\n",
+                     "{}, bounding box {}, VBI skip {}, CPU cull {}, shared texture memory {}\n",
                      OnOff(!Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE)),
                      OnOff(Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM)),
                      OnOff(Config::Get(Config::GFX_HACK_DEFER_EFB_COPIES)),
@@ -1369,7 +1371,9 @@ std::string DescribeEmulation(Core::System& system)
                      OnOff(Config::Get(Config::GFX_HACK_IMMEDIATE_XFB)),
                      OnOff(!Config::Get(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES)),
                      OnOff(Config::Get(Config::GFX_HACK_BBOX_ENABLE)),
-                     OnOff(Config::Get(Config::GFX_HACK_VI_SKIP)));
+                     OnOff(Config::Get(Config::GFX_HACK_VI_SKIP)),
+                     OnOff(Config::Get(Config::GFX_CPU_CULL)),
+                     OnOff(Config::Get(Config::GFX_HACK_SHARED_TEXTURE_MEMORY)));
   return out;
 }
 

@@ -17,6 +17,8 @@
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 
+#include "Core/Config/GraphicsSettings.h"
+
 #include "VideoBackends/Deko3D/DKCommandBufferManager.h"
 #include "VideoBackends/Deko3D/DKContext.h"
 #include "VideoBackends/Deko3D/DKGfx.h"
@@ -285,7 +287,8 @@ std::unique_ptr<DKTexture> DKTexture::Create(const TextureConfig& config, std::s
   const u32 image_size = static_cast<u32>(layout.getSize());
   const u32 image_alignment = std::max<u32>(layout.getAlignment(), DK_MEMBLOCK_ALIGNMENT);
   const bool share_memory = !config.IsRenderTarget() && !config.IsComputeImage() &&
-                            !config.IsMultisampled() && image_size <= MAX_SHARED_TEXTURE_SIZE;
+                            !config.IsMultisampled() && image_size <= MAX_SHARED_TEXTURE_SIZE &&
+                            Config::Get(Config::GFX_HACK_SHARED_TEXTURE_MEMORY);
 
   Chunk* chunk = nullptr;
   u32 chunk_offset = 0;

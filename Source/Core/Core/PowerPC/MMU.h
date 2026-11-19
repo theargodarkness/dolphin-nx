@@ -335,6 +335,7 @@ private:
 
   void Memcheck(u32 address, u64 var, bool write, size_t size);
 
+  bool PreDirtiesPages() const;
   void ClearPageTable();
   void ReloadPageTable();
   void PageTableUpdated(std::span<const u8> page_table);

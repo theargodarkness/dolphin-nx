@@ -343,6 +343,15 @@ void MemoryManager::UpdateDBATMappings(const PowerPC::BatTable& dbat_table)
   }
 }
 
+bool MemoryManager::SupportsReadOnlyMappings()
+{
+#ifdef __SWITCH__
+  return Common::HorizonFastmem::AreReadOnlyMappingsSupported();
+#else
+  return true;
+#endif
+}
+
 void MemoryManager::AddPageTableMapping(u32 logical_address, u32 translated_address, bool writeable)
 {
   if (!m_is_fastmem_arena_initialized)
@@ -408,6 +417,13 @@ bool MemoryManager::CanCreateHostMappingForGuestPages(std::span<const u32> entri
 void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_address,
                                             bool writeable, u32 logical_size)
 {
+  if (!writeable && !SupportsReadOnlyMappings())
+  {
+    // A page that must fault on writes cannot be mapped at all here. It takes the slow path.
+    RemoveHostPageTableMapping(logical_address);
+    return;
+  }
+
   for (const auto& physical_region : m_physical_regions)
   {
     if (!physical_region.active)
@@ -446,13 +462,28 @@ void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_
           m_arena.MapInMemoryRegion(position, mapped_size, base, writeable);
       if (!mapped_pointer)
       {
+#ifdef __SWITCH__
+        // Not fatal: the page simply stays on the slow path.
+        if (!m_page_table_mapping_failed)
+        {
+          m_page_table_mapping_failed = true;
+          ERROR_LOG_FMT(MEMMAP,
+                        "Failed to map memory region at 0x{:08X} (size 0x{:08X}) into logical "
+                        "fastmem region at 0x{:08X} with {} page table mappings in place. Later "
+                        "failures are not logged.",
+                        intersection_start, mapped_size, logical_address,
+                        m_page_table_mapped_entries.size());
+        }
+#else
         PanicAlertFmt("Memory::AddPageTableMapping(): Failed to map memory region at 0x{:08X} "
                       "(size 0x{:08X}) into logical fastmem region at 0x{:08X}.",
                       intersection_start, mapped_size, logical_address);
+#endif
         continue;
       }
       m_page_table_mapped_entries.emplace(logical_address,
                                           LogicalMemoryView{mapped_pointer, mapped_size});
+      m_page_table_mapping_count = m_page_table_mapped_entries.size();
     }
   }
 }
@@ -499,6 +530,7 @@ void MemoryManager::RemoveHostPageTableMapping(u32 logical_address)
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
 
     m_page_table_mapped_entries.erase(it);
+    m_page_table_mapping_count = m_page_table_mapped_entries.size();
   }
 }
 
@@ -509,6 +541,7 @@ void MemoryManager::RemoveAllPageTableMappings()
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
   }
   m_page_table_mapped_entries.clear();
+  m_page_table_mapping_count = 0;
   m_large_readable_pages.clear();
   m_large_writeable_pages.clear();
 }
@@ -605,6 +638,7 @@ void MemoryManager::ShutdownFastmemArena()
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
   }
   m_page_table_mapped_entries.clear();
+  m_page_table_mapping_count = 0;
 
   m_arena.ReleaseMemoryRegion();
 

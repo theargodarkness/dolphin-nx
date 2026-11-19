@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <set>
@@ -110,6 +111,10 @@ public:
   void AddPageTableMapping(u32 logical_address, u32 translated_address, bool writeable);
   void RemovePageTableMappings(const std::set<u32>& mappings);
   void RemoveAllPageTableMappings();
+  // False where the host cannot map guest memory so that reads succeed and writes fault.
+  static bool SupportsReadOnlyMappings();
+  // For diagnostics only. May be read from another thread, where it is merely approximate.
+  size_t GetPageTableMappingCount() const { return m_page_table_mapping_count; }
 
   void Clear();
 
@@ -274,6 +279,8 @@ private:
   // The key is the logical address
   std::map<u32, LogicalMemoryView> m_dbat_mapped_entries;
   std::map<u32, LogicalMemoryView> m_page_table_mapped_entries;
+  std::atomic<size_t> m_page_table_mapping_count{0};
+  bool m_page_table_mapping_failed = false;
 
   std::array<void*, PowerPC::BAT_PAGE_COUNT> m_physical_page_mappings{};
   std::array<void*, PowerPC::BAT_PAGE_COUNT> m_logical_page_mappings{};

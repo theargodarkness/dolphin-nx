@@ -1386,6 +1386,16 @@ void MMU::InvalidateTLBEntry(u32 address)
     m_ppc_state.pagetable_update_pending = true;
 }
 
+// Page table fastmem maps a page whose C (changed) bit is clear read-only, so that the first write
+// faults and reaches the code that sets the bit. Where the host has no read-only mappings, C is set
+// as soon as the page is mapped instead. To the guest this looks like every page it touches having
+// been written to, which at worst makes a pager save a page it did not need to.
+bool MMU::PreDirtiesPages() const
+{
+  return !Memory::MemoryManager::SupportsReadOnlyMappings() &&
+         m_system.GetJitInterface().WantsPageTableMappings();
+}
+
 void MMU::ClearPageTable()
 {
   // If we've skipped processing any update to the page table, we need to remove all host mappings,
@@ -1638,6 +1648,19 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
       // TranslatePageAddress sets the R bit.
       if (host_mapping && pte2.R)
       {
+        if (!pte2.C && PreDirtiesPages())
+        {
+          // The host can't map this page so that the first write faults and sets C. Set it now.
+          // The table being walked can be a copy that guest memory has moved on from, hence the
+          // comparison.
+          const u32 pte2_address = m_ppc_state.pagetable_base + page_table_offset + 4;
+          if (m_memory.Read_U32(pte2_address) == pte2.Hex)
+          {
+            pte2.C = 1;
+            m_memory.Write_U32(pte2.Hex, pte2_address);
+          }
+        }
+
         const u32 physical_address = pte2.RPN << 12;
         (pte2.C ? m_added_readwrite_mappings : m_added_readonly_mappings)
             .emplace(logical_address->Hex, physical_address);
@@ -1843,14 +1866,16 @@ MMU::TranslateAddressResult MMU::TranslatePageAddress(const EffectiveAddress add
         case XCheckTLBFlag::OpcodeNoException:
           break;
         case XCheckTLBFlag::Read:
+        case XCheckTLBFlag::Opcode:
           pte2.R = 1;
+          // See PreDirtiesPages. Doing this for instruction fetches too keeps a later data read,
+          // which the TLB would answer without coming here, from finding the page unmapped.
+          if (PreDirtiesPages())
+            pte2.C = 1;
           break;
         case XCheckTLBFlag::Write:
           pte2.R = 1;
           pte2.C = 1;
-          break;
-        case XCheckTLBFlag::Opcode:
-          pte2.R = 1;
           break;
         }
 

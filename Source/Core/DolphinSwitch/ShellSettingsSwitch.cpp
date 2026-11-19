@@ -824,6 +824,8 @@ void BuildHacks(PageBuilder& page)
   page.Toggle("GPU texture decoding", Config::GFX_ENABLE_GPU_TEXTURE_DECODING);
   page.Toggle("Fast texture sampling", Config::GFX_HACK_FAST_TEXTURE_SAMPLING);
   page.Toggle("Save texture cache to state", Config::GFX_SAVE_TEXTURE_CACHE_TO_STATE);
+  page.Toggle("Shared texture memory", Config::GFX_HACK_SHARED_TEXTURE_MEMORY);
+  page.Toggle("Cull vertices on the CPU", Config::GFX_CPU_CULL);
   page.Note("Saving the texture cache makes save states larger, but keeps some games from "
             "drawing stale textures after loading one.");
 
@@ -977,6 +979,7 @@ void BuildEmulation(PageBuilder& page)
 
   page.Header("Accuracy");
   page.Toggle("Enable MMU", Config::MAIN_MMU);
+  page.Toggle("Fast memory for page tables", Config::MAIN_PAGE_TABLE_FASTMEM);
   page.Toggle("Accurate CPU cache", Config::MAIN_ACCURATE_CPU_CACHE);
   page.Toggle("Enable FPRF", Config::MAIN_FPRF);
   page.Toggle("Native square root", Config::MAIN_JIT_NATIVE_SQRT);

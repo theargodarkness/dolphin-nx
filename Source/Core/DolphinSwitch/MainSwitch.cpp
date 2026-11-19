@@ -145,9 +145,11 @@ void ApplyPlatformConfigOverrides()
   const bool fastmem_arena = Common::HorizonFastmem::IsArenaSupported();
   Config::SetCurrent(Config::MAIN_FASTMEM_ARENA, fastmem_arena);
 
-  // Page table fastmem additionally needs mappings where reads succeed and writes fault.
-  Config::SetCurrent(Config::MAIN_PAGE_TABLE_FASTMEM,
-                     fastmem_arena && Common::HorizonFastmem::AreReadOnlyMappingsSupported());
+  // Page table fastmem normally needs mappings where reads succeed and writes fault. Where
+  // Horizon cannot make those, the MMU marks pages as changed when it maps them instead (see
+  // MMU::PreDirtiesPages), so all it needs is the arena.
+  if (!fastmem_arena)
+    Config::SetCurrent(Config::MAIN_PAGE_TABLE_FASTMEM, false);
 
   Common::HorizonJitStack::GetGuardSource();
 
