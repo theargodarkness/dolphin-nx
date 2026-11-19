@@ -56,13 +56,26 @@ public:
     SetEnable(true);
   }
 
-  void Log(LogLevel, const char* msg) override
+  void Log([[maybe_unused]] LogLevel level, const char* msg) override
   {
     if (!IsEnabled() || !IsValid())
       return;
 
     std::lock_guard<std::mutex> lk(m_log_lock);
+#ifdef __SWITCH__
+    // Flushing reaches the SD card and has been measured at tens of milliseconds, on whichever
+    // emulation thread happened to log. Errors still go out at once, and so does a line that
+    // follows two quiet seconds. Only the rest of a burst waits for the next flush.
+    m_logfile << msg;
+    const auto now = std::chrono::steady_clock::now();
+    if (level == LogLevel::LERROR || now - m_last_flush >= std::chrono::seconds(2))
+    {
+      m_logfile.flush();
+      m_last_flush = now;
+    }
+#else
     m_logfile << msg << std::flush;
+#endif
   }
 
   bool IsValid() const { return m_logfile.good(); }
@@ -72,6 +85,7 @@ public:
 private:
   std::mutex m_log_lock;
   std::ofstream m_logfile;
+  std::chrono::steady_clock::time_point m_last_flush{};
   bool m_enable;
 };
 
