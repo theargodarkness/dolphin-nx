@@ -329,8 +329,6 @@ void DKGfx::PresentBackbuffer()
   else
     g_dk_command_buffer_mgr->SubmitCommandBuffer(false);
 
-  TrimTextureMemoryPool();
-
   m_current_slot = -1;
   g_dk_command_buffer_mgr->PublishFrameGpuTime();
 }

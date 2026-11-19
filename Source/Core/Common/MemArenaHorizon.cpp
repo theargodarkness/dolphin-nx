@@ -144,6 +144,85 @@ struct Support
   bool read_only_mappings = false;
 };
 
+// Page table fastmem needs an alias of guest memory that faults on writes, and the one way of
+// getting it that DetectSupport tries is refused on some systems. This only records in the log
+// which other routes the kernel would allow here, so one of them can be built.
+void ProbeReadOnlyAlternatives(void* alias)
+{
+  const Handle self = envGetOwnProcessHandle();
+
+  const Result process_permission =
+      svcSetProcessMemoryPermission(self, reinterpret_cast<u64>(alias), HORIZON_PAGE_SIZE, Perm_R);
+  NOTICE_LOG_FMT(MEMMAP, "Read-only probe: svcSetProcessMemoryPermission on an alias: {:#010x}",
+                 process_permission);
+  if (R_SUCCEEDED(process_permission))
+    svcSetProcessMemoryPermission(self, reinterpret_cast<u64>(alias), HORIZON_PAGE_SIZE, Perm_Rw);
+
+  static constexpr struct
+  {
+    unsigned number;
+    const char* name;
+  } SYSCALLS[] = {
+      {0x13, "svcMapSharedMemory"},    {0x14, "svcUnmapSharedMemory"},
+      {0x15, "svcCreateTransferMemory"}, {0x50, "svcCreateSharedMemory"},
+      {0x51, "svcMapTransferMemory"},  {0x52, "svcUnmapTransferMemory"},
+      {0x4B, "svcCreateCodeMemory"},   {0x4C, "svcControlCodeMemory"},
+  };
+  for (const auto& syscall : SYSCALLS)
+  {
+    NOTICE_LOG_FMT(MEMMAP, "Read-only probe: {} {}", syscall.name,
+                   envIsSyscallHinted(syscall.number) ? "is available" : "is not available");
+  }
+
+  if (!envIsSyscallHinted(0x50) || !envIsSyscallHinted(0x13) || !envIsSyscallHinted(0x14))
+    return;
+
+  Handle shared = INVALID_HANDLE;
+  Result result = svcCreateSharedMemory(&shared, HORIZON_PAGE_SIZE, Perm_Rw, Perm_Rw);
+  NOTICE_LOG_FMT(MEMMAP, "Read-only probe: svcCreateSharedMemory: {:#010x}", result);
+  if (R_FAILED(result))
+    return;
+
+  virtmemLock();
+  void* const writable = virtmemFindAslr(HORIZON_PAGE_SIZE, 0);
+  ::VirtmemReservation* const writable_reservation =
+      writable ? virtmemAddReservation(writable, HORIZON_PAGE_SIZE) : nullptr;
+  void* const read_only = virtmemFindAslr(HORIZON_PAGE_SIZE, 0);
+  ::VirtmemReservation* const read_only_reservation =
+      read_only ? virtmemAddReservation(read_only, HORIZON_PAGE_SIZE) : nullptr;
+  virtmemUnlock();
+
+  if (writable_reservation && read_only_reservation)
+  {
+    const Result map_writable = svcMapSharedMemory(shared, writable, HORIZON_PAGE_SIZE, Perm_Rw);
+    const Result map_read_only = svcMapSharedMemory(shared, read_only, HORIZON_PAGE_SIZE, Perm_R);
+    NOTICE_LOG_FMT(MEMMAP, "Read-only probe: mapping shared memory writable {:#010x}, again "
+                           "read-only {:#010x}",
+                   map_writable, map_read_only);
+
+    if (R_SUCCEEDED(map_writable) && R_SUCCEEDED(map_read_only))
+    {
+      constexpr u32 PATTERN = 0x87654321;
+      *static_cast<volatile u32*>(writable) = PATTERN;
+      NOTICE_LOG_FMT(MEMMAP, "Read-only probe: the two shared memory views {} the same pages",
+                     *static_cast<volatile u32*>(read_only) == PATTERN ? "are" : "are NOT");
+    }
+
+    if (R_SUCCEEDED(map_writable))
+      svcUnmapSharedMemory(shared, writable, HORIZON_PAGE_SIZE);
+    if (R_SUCCEEDED(map_read_only))
+      svcUnmapSharedMemory(shared, read_only, HORIZON_PAGE_SIZE);
+  }
+
+  virtmemLock();
+  if (writable_reservation)
+    virtmemRemoveReservation(writable_reservation);
+  if (read_only_reservation)
+    virtmemRemoveReservation(read_only_reservation);
+  virtmemUnlock();
+  svcCloseHandle(shared);
+}
+
 Support DetectSupport()
 {
   Support support;
@@ -227,6 +306,7 @@ Support DetectSupport()
                  "Read-only fastmem mappings are unavailable. svcSetMemoryPermission on an "
                  "alias failed: {:#010x}",
                  result);
+    ProbeReadOnlyAlternatives(alias);
   }
 
   return support;

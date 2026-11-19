@@ -1259,7 +1259,7 @@ void MMU::GenerateISIException(u32 effective_address)
   m_ppc_state.npc = effective_address;
 
   m_ppc_state.Exceptions |= EXCEPTION_ISI;
-  WARN_LOG_FMT(POWERPC, "ISI exception at {:#010x}", m_ppc_state.pc);
+  DEBUG_LOG_FMT(POWERPC, "ISI exception at {:#010x}", m_ppc_state.pc);
 }
 
 void MMU::SDRUpdated()
