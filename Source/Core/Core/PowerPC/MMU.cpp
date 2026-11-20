@@ -1383,10 +1383,80 @@ void MMU::InvalidateTLBEntry(u32 address)
   (m_ppc_state.msr.DR ? s_tlb_invalidations_translating : s_tlb_invalidations_real_mode)
       .fetch_add(1, std::memory_order_relaxed);
 
-  if (m_ppc_state.msr.DR)
-    PageTableUpdated();
-  else
+  if (!m_ppc_state.msr.DR)
+  {
     m_ppc_state.pagetable_update_pending = true;
+    return;
+  }
+
+  // A pager invalidates one page at a time, hundreds of times in a row when a game swaps code
+  // in, and comparing the whole page table each time adds up. What the invalidation is for can
+  // only be in the PTEGs its address hashes to, so most of the time only those are looked at.
+  // Changes elsewhere, which the guest has not asked to take effect yet, are picked up by the
+  // full update that still happens every few invalidations.
+  constexpr u32 FULL_SCAN_INTERVAL = 8;
+  if (++m_invalidations_since_full_scan < FULL_SCAN_INTERVAL && PageTableUpdatedForPage(address))
+    return;
+
+  m_invalidations_since_full_scan = 0;
+  PageTableUpdated();
+}
+
+bool MMU::PageTableUpdatedForPage(u32 address)
+{
+  if (!m_system.GetJitInterface().WantsPageTableMappings())
+    return false;
+
+  const u32 page_table_base = m_ppc_state.pagetable_base;
+  const u32 page_table_end =
+      Common::AlignUp(page_table_base | m_ppc_state.pagetable_mask, PAGE_TABLE_MIN_SIZE);
+  const u32 page_table_size = page_table_end - page_table_base;
+  if (m_page_table.size() != page_table_size)
+    return false;
+
+  const u8* const page_table_view =
+      m_system.GetMemory().GetPointerForRange(page_table_base, page_table_size);
+  if (!page_table_view)
+    return false;
+
+  m_scan_filter.resize(page_table_size / 64, 0);
+
+  std::array<u32, 32> ptegs;
+  u32 pteg_count = 0;
+  const u32 page_index = (address >> HW_PAGE_INDEX_SHIFT) & 0xffff;
+  for (const u32 sr_value : m_ppc_state.sr)
+  {
+    const auto sr = UReg_SR{sr_value};
+    if (sr.T != 0)
+      continue;
+
+    const u32 hash = sr.VSID ^ page_index;
+    for (const u32 h : {hash, ~hash})
+    {
+      const u32 pteg_address = ((h << 6) & m_ppc_state.pagetable_mask) | page_table_base;
+      const u32 pteg = (pteg_address - page_table_base) / 64;
+      if (pteg >= m_scan_filter.size())
+      {
+        for (u32 i = 0; i < pteg_count; ++i)
+          m_scan_filter[ptegs[i]] = 0;
+        return false;
+      }
+      if (m_scan_filter[pteg] == 0)
+      {
+        m_scan_filter[pteg] = 1;
+        ptegs[pteg_count++] = pteg;
+      }
+    }
+  }
+
+  m_scan_filter_active = true;
+  PageTableUpdated(std::span(page_table_view, page_table_size));
+  m_scan_filter_active = false;
+
+  for (u32 i = 0; i < pteg_count; ++i)
+    m_scan_filter[ptegs[i]] = 0;
+
+  return true;
 }
 
 // Page table fastmem maps a page whose C (changed) bit is clear read-only, so that the first write
@@ -1469,7 +1539,8 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
   }
 
   s_page_table_scans.fetch_add(1, std::memory_order_relaxed);
-  s_page_table_scan_bytes.fetch_add(page_table.size(), std::memory_order_relaxed);
+  s_page_table_scan_bytes.fetch_add(m_scan_filter_active ? 32 * 64 : page_table.size(),
+                                    std::memory_order_relaxed);
 
   m_removed_mappings.clear();
   m_added_readonly_mappings.clear();
@@ -1689,8 +1760,14 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
     {
       // Nearly all of the table is unchanged on any one update, so rule out a whole stretch of
       // it at a time before looking at single PTEGs.
-      if ((j % UNCHANGED_STRETCH) == 0 &&
-          std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) == 0)
+      if (m_scan_filter_active)
+      {
+        if (m_scan_filter[(i + j) / 64] == 0)
+          continue;
+      }
+      else if ((j % UNCHANGED_STRETCH) == 0 &&
+               std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) ==
+                   0)
       {
         j += UNCHANGED_STRETCH - 64;
         continue;
@@ -1776,8 +1853,14 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
       {
         // Nearly all of the table is unchanged on any one update, so rule out a whole stretch of
         // it at a time before looking at single PTEGs.
-        if ((j % UNCHANGED_STRETCH) == 0 &&
-            std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) == 0)
+        if (m_scan_filter_active)
+        {
+          if (m_scan_filter[(i + j) / 64] == 0)
+            continue;
+        }
+        else if ((j % UNCHANGED_STRETCH) == 0 &&
+                 std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) ==
+                     0)
         {
           j += UNCHANGED_STRETCH - 64;
           continue;

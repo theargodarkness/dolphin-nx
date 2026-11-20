@@ -349,6 +349,14 @@ private:
   void ClearPageTable();
   void ReloadPageTable();
   void PageTableUpdated(std::span<const u8> page_table);
+  // Brings the mappings up to date for the one page a TLB invalidation names, looking only at
+  // the PTEGs that can hold it. Returns false if a full update is needed instead.
+  bool PageTableUpdatedForPage(u32 address);
+
+  // One entry per PTEG. While m_scan_filter_active is set, PageTableUpdated skips the rest.
+  std::vector<u8> m_scan_filter;
+  bool m_scan_filter_active = false;
+  u32 m_invalidations_since_full_scan = 0;
 
   void UpdateBATs(BatTable& bat_table, u32 base_spr);
   void UpdateFakeMMUBat(BatTable& bat_table, u32 start_addr);
