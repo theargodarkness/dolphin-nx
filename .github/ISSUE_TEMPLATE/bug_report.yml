@@ -14,7 +14,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Nezumiiruka version and build ID
+      label: dolphin-nx version and build ID
       description: Settings -> About shows the Version, Revision and Build ID (first 8 characters). Please copy all three.
       placeholder: "1.0.0-rc1, 3d568be4a0, build ID 1a2b3c4d..."
     validations:
@@ -123,15 +123,15 @@ body:
     attributes:
       label: Did this work before?
       description: |
-        If an earlier Nezumiiruka version worked, say which. If you have tried the same game in
+        If an earlier dolphin-nx version worked, say which. If you have tried the same game in
         Dolphin on a PC or Android, say whether the problem happens there too.
 
   - type: textarea
     id: main-log
     attributes:
-      label: Nezumiiruka log (dolphin.log)
+      label: dolphin-nx log (dolphin.log)
       description: |
-        Required for every report. The log is `/switch/nezumiiruka/Logs/dolphin.log`.
+        Required for every report. The log is `/switch/dolphin-nx/Logs/dolphin.log`.
 
         It keeps growing across launches, so if it's too large, please delete it, reproduce the problem once,
         then attach the new file.
@@ -143,7 +143,7 @@ body:
     attributes:
       label: Crash log (crash.log)
       description: |
-        If Nezumiiruka crashed, attach `/switch/nezumiiruka/crash.log`.
+        If dolphin-nx crashed, attach `/switch/dolphin-nx/crash.log`.
 
   - type: textarea
     id: ams-report
@@ -162,7 +162,7 @@ body:
         For slowdowns only. While the slow part is on screen, press + and − together to open the
         pause menu and choose "Capture profile". Keep still until the capture finishes (a message
         appears on screen), then attach the newest `profile-<game ID>-<date>.txt` from
-        `/switch/nezumiiruka/Dump/`.
+        `/switch/dolphin-nx/Dump/`.
 
   - type: textarea
     id: media
@@ -171,7 +171,7 @@ body:
       description: |
         Very helpful for graphical problems. You can use the console's capture button, or "Take
         screenshot", in the pause menu. Those screenshots are saved in
-        `/switch/nezumiiruka/ScreenShots/`.
+        `/switch/dolphin-nx/ScreenShots/`.
 
   - type: checkboxes
     id: checks

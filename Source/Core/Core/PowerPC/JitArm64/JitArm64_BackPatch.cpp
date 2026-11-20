@@ -16,6 +16,7 @@
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
 
+#include "Core/HW/GPFifo.h"
 #include "Core/PowerPC/Gekko.h"
 #include "Core/PowerPC/JitArm64/Jit_Util.h"
 #include "Core/PowerPC/JitArmCommon/BackPatch.h"
@@ -69,6 +70,7 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
   bool in_far_code = false;
   u8* fast_access_start = GetWritableCodePtr();
   std::optional<FixupBranch> slow_access_fixup;
+  std::optional<FixupBranch> gather_pipe_done;
 
   if (emit_fast_access)
   {
@@ -99,7 +101,8 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
       const ARM64Reg temp1 = flags & BackPatchInfo::FLAG_STORE ? ARM64Reg::W1 : ARM64Reg::W3;
       const ARM64Reg temp2 = ARM64Reg::W0;
 
-      slow_access_fixup = CheckIfSafeAddress(addr, temp1, temp2);
+      slow_access_fixup = CheckIfSafeAddress(addr, temp1, temp2, true,
+                                             (flags & BackPatchInfo::FLAG_STORE) != 0);
     }
 
     if ((flags & BackPatchInfo::FLAG_STORE) && (flags & BackPatchInfo::FLAG_FLOAT))
@@ -172,6 +175,61 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
 
     if (slow_access_fixup)
       SetJumpTarget(*slow_access_fixup);
+
+    // The quantized store routines are how some games (Rogue Leader for one) feed vertices to the
+    // write gather pipe, a byte or two at a time. Without this every such store would save and
+    // restore some forty registers around a call that appends those bytes to a buffer. This does
+    // what GPFifoManager::Write8 and friends do, and only makes the call once the pipe has filled.
+    if (emitting_routine && emit_fast_access && jo.fastmem && jo.optimizeGatherPipe &&
+        (flags & BackPatchInfo::FLAG_STORE) && (flags & BackPatchInfo::FLAG_FLOAT))
+    {
+      constexpr u32 GATHER_PIPE_ADDRESS = 0xCC008000;
+      constexpr u32 EXPECTED_BAT_ENTRY =
+          (GPFifo::GATHER_PIPE_PHYSICAL_ADDRESS & ~(PowerPC::BAT_PAGE_SIZE - 1)) |
+          PowerPC::BAT_MAPPED_BIT;
+
+      MOVI2R(ARM64Reg::W1, GATHER_PIPE_ADDRESS);
+      CMP(EncodeRegTo32(addr), ARM64Reg::W1);
+      FixupBranch other_address = B(CCFlags::CC_NEQ);
+
+      // The address only means the pipe while data address translation is on and the block
+      // address translation the game set up sends it to the pipe's physical address.
+      static_assert(FEATURE_FLAG_MSR_DR == 1 << 0);
+      LDR(IndexType::Unsigned, ARM64Reg::W1, PPC_REG, PPCSTATE_OFF(feature_flags));
+      FixupBranch real_mode = TBZ(ARM64Reg::W1, 0);
+      MOVP2R(ARM64Reg::X0,
+             &m_mmu.GetDBATTable()[GATHER_PIPE_ADDRESS >> PowerPC::BAT_INDEX_SHIFT]);
+      LDR(IndexType::Unsigned, ARM64Reg::W1, ARM64Reg::X0, 0);
+      ANDI2R(ARM64Reg::W1, ARM64Reg::W1, PowerPC::BAT_RESULT_MASK | PowerPC::BAT_MAPPED_BIT,
+             ARM64Reg::W0);
+      CMPI2R(ARM64Reg::W1, EXPECTED_BAT_ENTRY, ARM64Reg::W0);
+      FixupBranch other_mapping = B(CCFlags::CC_NEQ);
+
+      static_assert(PPCSTATE_OFF(gather_pipe_ptr) <= 504);
+      static_assert(PPCSTATE_OFF(gather_pipe_ptr) + 8 == PPCSTATE_OFF(gather_pipe_base_ptr));
+      LDR(IndexType::Unsigned, ARM64Reg::X0, PPC_REG, PPCSTATE_OFF(gather_pipe_ptr));
+      const ARM64Reg swapped = ByteswapBeforeStore(this, &m_float_emit, ARM64Reg::D0,
+                                                   EncodeRegToDouble(RS), flags, true);
+      m_float_emit.STR(access_size, IndexType::Post, swapped, ARM64Reg::X0, access_size >> 3);
+      STR(IndexType::Unsigned, ARM64Reg::X0, PPC_REG, PPCSTATE_OFF(gather_pipe_ptr));
+      LDR(IndexType::Unsigned, ARM64Reg::X1, PPC_REG, PPCSTATE_OFF(gather_pipe_base_ptr));
+      SUB(ARM64Reg::X0, ARM64Reg::X0, ARM64Reg::X1);
+      CMPI2R(ARM64Reg::X0, GPFifo::GATHER_PIPE_SIZE);
+      FixupBranch not_full = B(CCFlags::CC_LO);
+
+      ABI_PushRegisters(gprs_to_push);
+      m_float_emit.ABI_PushRegisters(fprs_to_push, ARM64Reg::X30);
+      ABI_CallFunction(&GPFifo::CheckGatherPipe, &m_system.GetGPFifo());
+      m_float_emit.ABI_PopRegisters(fprs_to_push, ARM64Reg::X30);
+      ABI_PopRegisters(gprs_to_push);
+
+      SetJumpTarget(not_full);
+      gather_pipe_done = B();
+
+      SetJumpTarget(other_address);
+      SetJumpTarget(real_mode);
+      SetJumpTarget(other_mapping);
+    }
 
     const ARM64Reg temp_gpr = ARM64Reg::W1;
     const int temp_gpr_index = DecodeReg(temp_gpr);
@@ -296,6 +354,9 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
     }
 
     ABI_PopRegisters(gprs_to_push & gprs_to_push_early);
+
+    if (gather_pipe_done)
+      SetJumpTarget(*gather_pipe_done);
   }
 
   if (in_far_code)
@@ -353,6 +414,7 @@ bool JitArm64::HandleFastmemFault(SContext* ctx)
   ARM64XEmitter emitter(fastmem_area_start, fastmem_area_end);
 
   emitter.BL(entry_it->slow_access_code);
+  PowerPC::MMU::s_fastmem_backpatches.fetch_add(1, std::memory_order_relaxed);
 
   while (emitter.GetCodePtr() < fastmem_area_end)
     emitter.NOP();

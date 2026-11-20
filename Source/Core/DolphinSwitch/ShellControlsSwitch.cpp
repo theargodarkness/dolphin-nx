@@ -88,6 +88,18 @@ constexpr std::array INPUT_CHOICES{
     InputChoice{"Sideways Joy-Con, stick down", "`Sideways Stick Y-`"},
     InputChoice{"Sideways Joy-Con, stick left", "`Sideways Stick X-`"},
     InputChoice{"Sideways Joy-Con, stick right", "`Sideways Stick X+`"},
+    InputChoice{"Upright Joy-Con, right button", "`Upright Right`"},
+    InputChoice{"Upright Joy-Con, bottom button", "`Upright Down`"},
+    InputChoice{"Upright Joy-Con, left button", "`Upright Left`"},
+    InputChoice{"Upright Joy-Con, top button", "`Upright Up`"},
+    InputChoice{"Upright Joy-Con, ZL or ZR", "`Upright Trigger`"},
+    InputChoice{"Upright Joy-Con, L or R", "`Upright Shoulder`"},
+    InputChoice{"Upright Joy-Con, Plus or Minus", "`Upright Menu`"},
+    InputChoice{"Upright Joy-Con, stick press", "`Upright Stick Click`"},
+    InputChoice{"Upright Joy-Con, stick up", "`Upright Stick Y+`"},
+    InputChoice{"Upright Joy-Con, stick down", "`Upright Stick Y-`"},
+    InputChoice{"Upright Joy-Con, stick left", "`Upright Stick X-`"},
+    InputChoice{"Upright Joy-Con, stick right", "`Upright Stick X+`"},
     InputChoice{"Touch screen press", "`Horizon/0/Touchscreen:Touch`"},
 };
 
@@ -107,6 +119,11 @@ constexpr Directions DPAD_OR_LEFT_STICK{"`Pad Up` | `Left Y+`", "`Pad Down` | `L
 constexpr Directions TOUCH_SCREEN{
     "`Horizon/0/Touchscreen:Touch Y-`", "`Horizon/0/Touchscreen:Touch Y+`",
     "`Horizon/0/Touchscreen:Touch X-`", "`Horizon/0/Touchscreen:Touch X+`"};
+// The Wii Remote is on its side too, so its D-pad is a quarter turn round from the stick.
+constexpr Directions SIDEWAYS_STICK{"`Sideways Stick X-`", "`Sideways Stick X+`",
+                                    "`Sideways Stick Y-`", "`Sideways Stick Y+`"};
+constexpr Directions UPRIGHT_STICK{"`Upright Stick Y+`", "`Upright Stick Y-`", "`Upright Stick X-`",
+                                   "`Upright Stick X+`"};
 constexpr Directions NOTHING{"", "", "", ""};
 
 struct Source
@@ -127,6 +144,8 @@ const std::vector<Source> DPAD_SOURCES{
     {"Left stick", LEFT_STICK},
     {"Right stick", RIGHT_STICK},
     {"D-pad or left stick", DPAD_OR_LEFT_STICK},
+    {"Upright Joy-Con stick", UPRIGHT_STICK},
+    {"Sideways Joy-Con stick", SIDEWAYS_STICK},
     {"Nothing", NOTHING},
 };
 

@@ -195,4 +195,9 @@ void FastCheckGatherPipe(GPFifoManager& gpfifo)
 {
   gpfifo.FastCheckGatherPipe();
 }
+
+void CheckGatherPipe(GPFifoManager& gpfifo)
+{
+  gpfifo.CheckGatherPipe();
+}
 }  // namespace GPFifo

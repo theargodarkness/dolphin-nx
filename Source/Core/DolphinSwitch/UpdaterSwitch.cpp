@@ -32,11 +32,11 @@ namespace UpdaterSwitch
 namespace
 {
 constexpr const char* RELEASES_URL =
-    "https://api.github.com/repos/PalindromicBreadLoaf/nezumiiruka/releases?per_page=20";
-constexpr const char* USER_AGENT = "Nezumiiruka-Updater/" NEZUMIIRUKA_VERSION;
-constexpr std::string_view ASSET_NAME = "nezumiiruka.nro";
-constexpr std::string_view VULKAN_ASSET_NAME = "nezumiiruka-vulkan.nro";
-constexpr std::string_view INSTALLED_NAME = "nezumiiruka.nro";
+    "https://api.github.com/repos/theargodarkness/dolphin-nx/releases?per_page=20";
+constexpr const char* USER_AGENT = "dolphin-nx-Updater/" NEZUMIIRUKA_VERSION;
+constexpr std::string_view ASSET_NAME = "dolphin-nx.nro";
+constexpr std::string_view VULKAN_ASSET_NAME = "dolphin-nx-vulkan.nro";
+constexpr std::string_view INSTALLED_NAME = "dolphin-nx.nro";
 constexpr std::string_view DIGEST_PREFIX = "sha256:";
 constexpr size_t NRO_MAGIC_OFFSET = 0x10;
 constexpr std::string_view NRO_MAGIC = "NRO0";
@@ -352,8 +352,8 @@ CheckResult CheckForUpdate(bool include_prereleases, bool vulkan, const std::ato
 
   if (!newest)
   {
-    result.error = vulkan ? "GitHub lists no Vulkan build of Nezumiiruka that can be installed." :
-                            "GitHub lists no release of Nezumiiruka that can be installed.";
+    result.error = vulkan ? "GitHub lists no Vulkan build of dolphin-nx that can be installed." :
+                            "GitHub lists no release of dolphin-nx that can be installed.";
     return result;
   }
 
@@ -370,7 +370,7 @@ std::expected<void, std::string> Install(const Release& release, const std::atom
 {
   const std::string& running = s_executable_path;
   if (!running.ends_with(".nro") || !File::IsFile(running))
-    return std::unexpected("Could not find the running copy of Nezumiiruka.");
+    return std::unexpected("Could not find the running copy of dolphin-nx.");
 
   Common::HttpRequest request(std::chrono::seconds(30), CancelWith(cancelled, progress));
   request.FollowRedirects(5);
@@ -406,7 +406,7 @@ std::expected<void, std::string> Install(const Release& release, const std::atom
     return std::unexpected("Could not write the update to the SD card.");
   }
 
-  NOTICE_LOG_FMT(COMMON, "Downloaded Nezumiiruka {}{}, replacing {} at exit", release.tag,
+  NOTICE_LOG_FMT(COMMON, "Downloaded dolphin-nx {}{}, replacing {} at exit", release.tag,
                  release.vulkan ? " (Vulkan)" : "", GetInstalledPath());
   return {};
 }

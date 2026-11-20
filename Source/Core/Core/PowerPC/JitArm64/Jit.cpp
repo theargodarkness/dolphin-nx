@@ -241,6 +241,7 @@ void JitArm64::ClearCache()
   blocks.Clear();
 #endif
   blocks.ClearRangesToFree();
+  blocks.ForgetSetAsideBlocks();
   const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
   m_far_code_0.ClearCodeSpace();
   m_near_code_0.ClearCodeSpace();
@@ -317,6 +318,9 @@ void JitArm64::ResetFreeMemoryRanges(size_t routines_near_size, size_t routines_
 
 void JitArm64::Shutdown()
 {
+  // Whichever CPU core runs next knows nothing of the lazy flags.
+  PowerPC::ResolveLazyFPRF(m_ppc_state);
+
   auto& memory = m_system.GetMemory();
   memory.ShutdownFastmemArena();
   FreeCodeSpace();
@@ -339,6 +343,10 @@ void JitArm64::FallBackToInterpreter(UGeckoInstruction inst)
     ADD(WA, WA, 4);
     STR(IndexType::Unsigned, WA, PPC_REG, PPCSTATE_OFF(npc));
   }
+
+  // The interpreter reads and writes FPSCR directly.
+  if (m_fprf)
+    ABI_CallFunction(&PowerPC::ResolveLazyFPRF, &m_ppc_state);
 
   Interpreter::Instruction instr = Interpreter::GetInterpreterOp(inst);
   ABI_CallFunction(instr, &m_system.GetInterpreter(), inst.hex);
@@ -432,8 +440,19 @@ void JitArm64::Cleanup()
 
   if (m_ppc_state.feature_flags & FEATURE_FLAG_PERFMON)
   {
-    ABI_CallFunction(&PowerPC::UpdatePerformanceMonitor, js.downcountAmount, js.numLoadStoreInst,
-                     js.numFloatingPointInst, &m_ppc_state);
+    // Games that turn the performance monitor on get here at the end of every block, so only add
+    // up what the block ran. PowerPC::FlushPerformanceMonitor applies the totals to the counters
+    // when something looks at them and at the end of each timing slice.
+    const auto tally = [this](u32 amount, s32 offset) {
+      if (amount == 0)
+        return;
+      LDR(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, offset);
+      ADDI2R(ARM64Reg::W0, ARM64Reg::W0, amount, ARM64Reg::W1);
+      STR(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, offset);
+    };
+    tally(js.downcountAmount, PPCSTATE_OFF(perfmon_pending_cycles));
+    tally(js.numLoadStoreInst, PPCSTATE_OFF(perfmon_pending_load_stores));
+    tally(js.numFloatingPointInst, PPCSTATE_OFF(perfmon_pending_fp_insts));
   }
 }
 
@@ -1114,6 +1133,13 @@ void JitArm64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
 
   const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
 
+  // Code the game swapped out and has now brought back unchanged does not need translating again.
+  if (m_reuse_translated_code && !IsDebuggingEnabled() &&
+      blocks.TryReuseBlock(em_address, jo.enableBlocklink))
+  {
+    return;
+  }
+
   std::size_t block_size = m_code_buffer.size();
 
   auto& cpu = m_system.GetCPU();
@@ -1150,7 +1176,9 @@ void JitArm64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
     m_ppc_state.Exceptions |= EXCEPTION_ISI;
     m_system.GetPowerPC().CheckExceptions();
     m_system.GetJitInterface().UpdateMembase();
-    WARN_LOG_FMT(POWERPC, "ISI exception at {:#010x}", nextPC);
+    // Games that page their own code in get here constantly, and the file log is flushed to
+    // storage on every line, so this cannot be a warning.
+    DEBUG_LOG_FMT(POWERPC, "ISI exception at {:#010x}", nextPC);
     return;
   }
 
@@ -1245,6 +1273,7 @@ std::vector<JitBase::CodeRegion> JitArm64::GetCodeRegions() const
       {"JIT asm: cstd", cstd},
       {"JIT asm: fprf_single", fprf_single},
       {"JIT asm: fprf_double", fprf_double},
+      {"JIT asm: resolve_lazy_fprf", resolve_lazy_fprf},
       {"JIT asm: fmadds_eft", fmadds_eft},
       {"JIT asm: ps_madd_eft", ps_madd_eft},
       {"JIT asm: paired_load_quantized", reinterpret_cast<const u8*>(paired_load_quantized)},
@@ -1586,6 +1615,8 @@ bool JitArm64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
 
         js.firstFPInstructionFound = true;
       }
+
+      EmitNativeSqrt(i);
 
       if (bJITRegisterCacheOff)
       {

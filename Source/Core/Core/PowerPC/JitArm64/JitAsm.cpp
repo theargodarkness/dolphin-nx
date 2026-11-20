@@ -134,6 +134,32 @@ void JitArm64::GenerateAsm()
       BR(block);
       SetJumpTarget(not_found);
     }
+    else if (GetBlockCache()->GetEntryPointDirectory())
+    {
+      // The same index as above, (feature_flags << 30) | (pc >> 2), split in two: the top bits
+      // pick a page out of the directory and the low bits an entry point out of the page. Empty
+      // stretches of the directory share a page of nulls, so only the entry point needs checking.
+      ARM64Reg feature_flags = ARM64Reg::W8;
+      ARM64Reg index = ARM64Reg::W9;
+      ARM64Reg directory = ARM64Reg::X10;
+      ARM64Reg block = ARM64Reg::X11;
+
+      constexpr u32 page_bits = JitBaseBlockCache::ENTRY_POINT_PAGE_BITS;
+      static_assert(JitBaseBlockCache::ENTRY_POINT_DIRECTORY_ELEMENTS ==
+                    size_t{1} << (33 - page_bits));
+
+      LDR(IndexType::Unsigned, feature_flags, PPC_REG, PPCSTATE_OFF(feature_flags));
+      MOVP2R(directory, GetBlockCache()->GetEntryPointDirectory());
+      LSR(index, DISPATCHER_PC, page_bits + 2);
+      BFI(index, feature_flags, 30 - page_bits, 3);
+      LDR(block, directory, ArithOption(EncodeRegTo64(index), true));
+      UBFX(index, DISPATCHER_PC, 2, page_bits);
+      LDR(block, block, ArithOption(EncodeRegTo64(index), true));
+
+      FixupBranch not_found = CBZ(block);
+      BR(block);
+      SetJumpTarget(not_found);
+    }
     else
     {
       ARM64Reg pc_masked = ARM64Reg::W8;
@@ -176,7 +202,8 @@ void JitArm64::GenerateAsm()
 
   // There is no point in calling the dispatcher in the fast lookup table
   // case, since the assembly dispatcher would already have found a block.
-  if (!assembly_dispatcher || !GetBlockCache()->GetEntryPoints())
+  if (!assembly_dispatcher ||
+      (!GetBlockCache()->GetEntryPoints() && !GetBlockCache()->GetEntryPointDirectory()))
   {
     // Call C version of Dispatch().
     MOVP2R(ARM64Reg::X8, reinterpret_cast<void*>(&JitBase::Dispatch));
@@ -286,6 +313,11 @@ void JitArm64::GenerateCommonAsm()
   GetAsmRoutines()->fprf_double = GetCodePtr();
   GenerateFPRF(false);
   Common::JitRegister::Register(GetAsmRoutines()->fprf_single, GetCodePtr(), "JIT_FPRF");
+
+  GetAsmRoutines()->resolve_lazy_fprf = GetCodePtr();
+  GenerateResolveLazyFPRF();
+  Common::JitRegister::Register(GetAsmRoutines()->resolve_lazy_fprf, GetCodePtr(),
+                                "JIT_resolve_lazy_fprf");
 
   GetAsmRoutines()->fmadds_eft = GetCodePtr();
   GenerateFmaddsEft();
@@ -482,6 +514,28 @@ void JitArm64::GenerateConvertSingleToDouble()
 }
 
 // Input in X0. Outputs to memory (PPCState). Clobbers X0-X4 and flags.
+// Brings FPSCR.FPRF up to date. Callable from anywhere in a block: only W0, W30 and the flags are
+// lost. Nothing is pending most of the time, so that case returns straight away.
+void JitArm64::GenerateResolveLazyFPRF()
+{
+  LDRH(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, PPCSTATE_OFF(lazy_fprf_ctrl));
+  CMP(ARM64Reg::W0, PowerPC::LAZY_FPRF_NONE);
+  FixupBranch pending = B(CCFlags::CC_NEQ);
+  RET();
+
+  SetJumpTarget(pending);
+
+  // CALLER_SAVED_GPRS includes X30, which is this routine's own return address.
+  const BitSet32 gprs_to_push = CALLER_SAVED_GPRS;
+  const BitSet32 fprs_to_push = BitSet32(0xFFFFFFFF);
+  ABI_PushRegisters(gprs_to_push);
+  m_float_emit.ABI_PushRegisters(fprs_to_push, ARM64Reg::X30);
+  ABI_CallFunction(&PowerPC::ResolveLazyFPRF, &m_ppc_state);
+  m_float_emit.ABI_PopRegisters(fprs_to_push, ARM64Reg::X30);
+  ABI_PopRegisters(gprs_to_push);
+  RET();
+}
+
 void JitArm64::GenerateFPRF(bool single)
 {
   const auto reg_encoder = single ? EncodeRegTo32 : EncodeRegTo64;

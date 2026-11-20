@@ -1259,7 +1259,7 @@ void MMU::GenerateISIException(u32 effective_address)
   m_ppc_state.npc = effective_address;
 
   m_ppc_state.Exceptions |= EXCEPTION_ISI;
-  WARN_LOG_FMT(POWERPC, "ISI exception at {:#010x}", m_ppc_state.pc);
+  DEBUG_LOG_FMT(POWERPC, "ISI exception at {:#010x}", m_ppc_state.pc);
 }
 
 void MMU::SDRUpdated()
@@ -1380,10 +1380,93 @@ void MMU::InvalidateTLBEntry(u32 address)
   m_ppc_state.tlb[PowerPC::DATA_TLB_INDEX][entry_index].Invalidate();
   m_ppc_state.tlb[PowerPC::INST_TLB_INDEX][entry_index].Invalidate();
 
-  if (m_ppc_state.msr.DR)
-    PageTableUpdated();
-  else
+  (m_ppc_state.msr.DR ? s_tlb_invalidations_translating : s_tlb_invalidations_real_mode)
+      .fetch_add(1, std::memory_order_relaxed);
+
+  if (!m_ppc_state.msr.DR)
+  {
     m_ppc_state.pagetable_update_pending = true;
+    return;
+  }
+
+  // A pager invalidates one page at a time, hundreds of times in a row when a game swaps code
+  // in, and comparing the whole page table each time adds up. What the invalidation is for can
+  // only be in the PTEGs its address hashes to, so most of the time only those are looked at.
+  // Changes elsewhere, which the guest has not asked to take effect yet, are picked up by the
+  // full update that still happens every few invalidations.
+  constexpr u32 FULL_SCAN_INTERVAL = 8;
+  if (++m_invalidations_since_full_scan < FULL_SCAN_INTERVAL && PageTableUpdatedForPage(address))
+    return;
+
+  m_invalidations_since_full_scan = 0;
+  PageTableUpdated();
+}
+
+bool MMU::PageTableUpdatedForPage(u32 address)
+{
+  if (!m_system.GetJitInterface().WantsPageTableMappings())
+    return false;
+
+  const u32 page_table_base = m_ppc_state.pagetable_base;
+  const u32 page_table_end =
+      Common::AlignUp(page_table_base | m_ppc_state.pagetable_mask, PAGE_TABLE_MIN_SIZE);
+  const u32 page_table_size = page_table_end - page_table_base;
+  if (m_page_table.size() != page_table_size)
+    return false;
+
+  const u8* const page_table_view =
+      m_system.GetMemory().GetPointerForRange(page_table_base, page_table_size);
+  if (!page_table_view)
+    return false;
+
+  m_scan_filter.resize(page_table_size / 64, 0);
+
+  std::array<u32, 32> ptegs;
+  u32 pteg_count = 0;
+  const u32 page_index = (address >> HW_PAGE_INDEX_SHIFT) & 0xffff;
+  for (const u32 sr_value : m_ppc_state.sr)
+  {
+    const auto sr = UReg_SR{sr_value};
+    if (sr.T != 0)
+      continue;
+
+    const u32 hash = sr.VSID ^ page_index;
+    for (const u32 h : {hash, ~hash})
+    {
+      const u32 pteg_address = ((h << 6) & m_ppc_state.pagetable_mask) | page_table_base;
+      const u32 pteg = (pteg_address - page_table_base) / 64;
+      if (pteg >= m_scan_filter.size())
+      {
+        for (u32 i = 0; i < pteg_count; ++i)
+          m_scan_filter[ptegs[i]] = 0;
+        return false;
+      }
+      if (m_scan_filter[pteg] == 0)
+      {
+        m_scan_filter[pteg] = 1;
+        ptegs[pteg_count++] = pteg;
+      }
+    }
+  }
+
+  m_scan_filter_active = true;
+  PageTableUpdated(std::span(page_table_view, page_table_size));
+  m_scan_filter_active = false;
+
+  for (u32 i = 0; i < pteg_count; ++i)
+    m_scan_filter[ptegs[i]] = 0;
+
+  return true;
+}
+
+// Page table fastmem maps a page whose C (changed) bit is clear read-only, so that the first write
+// faults and reaches the code that sets the bit. Where the host has no read-only mappings, C is set
+// as soon as the page is mapped instead. To the guest this looks like every page it touches having
+// been written to, which at worst makes a pager save a page it did not need to.
+bool MMU::PreDirtiesPages() const
+{
+  return !Memory::MemoryManager::SupportsReadOnlyMappings() &&
+         m_system.GetJitInterface().WantsPageTableMappings();
 }
 
 void MMU::ClearPageTable()
@@ -1454,6 +1537,10 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
     ClearPageTable();
     return;
   }
+
+  s_page_table_scans.fetch_add(1, std::memory_order_relaxed);
+  s_page_table_scan_bytes.fetch_add(m_scan_filter_active ? 32 * 64 : page_table.size(),
+                                    std::memory_order_relaxed);
 
   m_removed_mappings.clear();
   m_added_readonly_mappings.clear();
@@ -1638,12 +1725,28 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
       // TranslatePageAddress sets the R bit.
       if (host_mapping && pte2.R)
       {
+        if (!pte2.C && PreDirtiesPages())
+        {
+          // The host can't map this page so that the first write faults and sets C. Set it now.
+          // The table being walked can be a copy that guest memory has moved on from, hence the
+          // comparison.
+          const u32 pte2_address = m_ppc_state.pagetable_base + page_table_offset + 4;
+          if (m_memory.Read_U32(pte2_address) == pte2.Hex)
+          {
+            pte2.C = 1;
+            m_memory.Write_U32(pte2.Hex, pte2_address);
+          }
+        }
+
         const u32 physical_address = pte2.RPN << 12;
         (pte2.C ? m_added_readwrite_mappings : m_added_readonly_mappings)
             .emplace(logical_address->Hex, physical_address);
       }
     }
   };
+
+  constexpr u32 UNCHANGED_STRETCH = 2048;
+  static_assert(PAGE_TABLE_MIN_SIZE % UNCHANGED_STRETCH == 0);
 
   bool run_pass_2 = false;
 
@@ -1655,6 +1758,21 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
 
     for (u32 j = 0; j < PAGE_TABLE_MIN_SIZE; j += 64)
     {
+      // Nearly all of the table is unchanged on any one update, so rule out a whole stretch of
+      // it at a time before looking at single PTEGs.
+      if (m_scan_filter_active)
+      {
+        if (m_scan_filter[(i + j) / 64] == 0)
+          continue;
+      }
+      else if ((j % UNCHANGED_STRETCH) == 0 &&
+               std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) ==
+                   0)
+      {
+        j += UNCHANGED_STRETCH - 64;
+        continue;
+      }
+
       if (compare_64_bytes(old_page_table + i + j, new_page_table + i + j)) [[likely]]
         continue;
 
@@ -1662,6 +1780,8 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
       {
         if (std::memcmp(old_page_table + i + j + k, new_page_table + i + j + k, 8) == 0) [[likely]]
           continue;
+
+        s_page_table_entries_changed.fetch_add(1, std::memory_order_relaxed);
 
         // Remove old mappings.
         UPTE_Lo old_pte1(Common::swap32(old_page_table + i + j + k));
@@ -1731,6 +1851,21 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
 
       for (u32 j = 0; j < PAGE_TABLE_MIN_SIZE; j += 64)
       {
+        // Nearly all of the table is unchanged on any one update, so rule out a whole stretch of
+        // it at a time before looking at single PTEGs.
+        if (m_scan_filter_active)
+        {
+          if (m_scan_filter[(i + j) / 64] == 0)
+            continue;
+        }
+        else if ((j % UNCHANGED_STRETCH) == 0 &&
+                 std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) ==
+                     0)
+        {
+          j += UNCHANGED_STRETCH - 64;
+          continue;
+        }
+
         if (compare_64_bytes(old_page_table + i + j, new_page_table + i + j)) [[likely]]
           continue;
 
@@ -1843,14 +1978,16 @@ MMU::TranslateAddressResult MMU::TranslatePageAddress(const EffectiveAddress add
         case XCheckTLBFlag::OpcodeNoException:
           break;
         case XCheckTLBFlag::Read:
+        case XCheckTLBFlag::Opcode:
           pte2.R = 1;
+          // See PreDirtiesPages. Doing this for instruction fetches too keeps a later data read,
+          // which the TLB would answer without coming here, from finding the page unmapped.
+          if (PreDirtiesPages())
+            pte2.C = 1;
           break;
         case XCheckTLBFlag::Write:
           pte2.R = 1;
           pte2.C = 1;
-          break;
-        case XCheckTLBFlag::Opcode:
-          pte2.R = 1;
           break;
         }
 

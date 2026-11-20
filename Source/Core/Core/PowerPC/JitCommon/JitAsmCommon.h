@@ -30,6 +30,7 @@ struct CommonAsmRoutinesBase
   const u8* cstd;
   const u8* fprf_single;
   const u8* fprf_double;
+  const u8* resolve_lazy_fprf;
   const u8* fmadds_eft;
   const u8* ps_madd_eft;
 

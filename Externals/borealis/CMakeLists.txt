@@ -46,8 +46,25 @@ list(APPEND _brls_sources "${_brls_extern}/nanovg/nanovg.c")
 set_source_files_properties("${_brls_extern}/nanovg/nanovg.c" PROPERTIES
   COMPILE_DEFINITIONS STB_IMAGE_STATIC)
 
+# The shell has to give the display as many images as the emulator's swap chain does
+# (Deko3D::DKSwapChain::NUM_IMAGES). Horizon goes on counting an image slot as in use after the
+# window is disconnected, so when the shell came back with fewer than the game had used, the
+# system could hand it a slot that no longer had an image, and deko3d aborted in acquireImage.
+# borealis fixes its count in a header, so a copy with the count changed goes ahead of it on the
+# include path.
+set(_brls_video_header "borealis/platforms/switch/switch_video.hpp")
+file(READ "${_brls}/include/${_brls_video_header}" _brls_video)
+string(REPLACE "FRAMEBUFFERS_COUNT = 2;" "FRAMEBUFFERS_COUNT = 3;" _brls_video_patched
+       "${_brls_video}")
+if(_brls_video_patched STREQUAL _brls_video)
+  message(FATAL_ERROR "borealis no longer declares FRAMEBUFFERS_COUNT = 2; update this patch.")
+endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/patched/borealis/platforms/switch")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/patched/${_brls_video_header}" "${_brls_video_patched}")
+
 add_library(borealis STATIC ${_brls_sources})
 target_include_directories(borealis PUBLIC
+  "${CMAKE_CURRENT_BINARY_DIR}/patched"
   "${_brls}/include"
   "${_brls}/include/borealis/extern"
   "${_brls}/include/borealis/extern/nanovg"

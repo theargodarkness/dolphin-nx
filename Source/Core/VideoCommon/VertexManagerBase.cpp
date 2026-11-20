@@ -23,6 +23,7 @@
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/DataReader.h"
+#include "VideoCommon/DrawStateLog.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/GraphicsModActionData.h"
@@ -506,6 +507,31 @@ void VertexManagerBase::Flush()
            bpmem.genMode.numtexgens.Value(), bpmem.dstalpha.enable.Value(),
            (bpmem.alpha_test.hex >> 16) & 0xff);
 #endif
+
+  DrawStateLog::RecordDraw(m_index_generator.GetIndexLen());
+  if (xfmem.projection.type == ProjectionType::Orthographic)
+  {
+    if (const NativeVertexFormat* const format = VertexLoaderManager::GetCurrentVertexFormat())
+    {
+      const PortableVertexDeclaration& declaration = format->GetVertexDeclaration();
+      const u32 stride = declaration.stride;
+      // The vertices of this draw are the last ones written. Only read them if they are sure to
+      // be in the buffer, and never many of them.
+      const u64 vertex_count = m_index_generator.GetNumVerts();
+      const bool readable =
+          declaration.position.enable && stride != 0 && vertex_count != 0 &&
+          vertex_count <= 1024 && m_cur_buffer_pointer >= m_base_buffer_pointer &&
+          static_cast<u64>(m_cur_buffer_pointer - m_base_buffer_pointer) >= vertex_count * stride;
+      const u8* const first_vertex =
+          readable ? m_cur_buffer_pointer - vertex_count * stride : nullptr;
+      DrawStateLog::RecordFlatDraw(
+          readable ? first_vertex + declaration.position.offset : nullptr,
+          static_cast<u32>(declaration.position.components),
+          readable && declaration.colors[0].enable ? first_vertex + declaration.colors[0].offset :
+                                                     nullptr,
+          stride, readable ? static_cast<u32>(vertex_count) : 0);
+    }
+  }
 
   // Track some stats used elsewhere by the anamorphic widescreen heuristic.
   auto& system = Core::System::GetInstance();

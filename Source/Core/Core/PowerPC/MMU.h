@@ -4,8 +4,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <map>
+#include <memory_resource>
 #include <optional>
 #include <set>
 #include <span>
@@ -118,6 +120,14 @@ enum class XCheckTLBFlag
 class MMU
 {
 public:
+  // Running totals for the profile capture, to tell what a stall in a paging game is made of.
+  static inline std::atomic<u64> s_tlb_invalidations_translating{0};
+  static inline std::atomic<u64> s_tlb_invalidations_real_mode{0};
+  static inline std::atomic<u64> s_page_table_scans{0};
+  static inline std::atomic<u64> s_page_table_scan_bytes{0};
+  static inline std::atomic<u64> s_page_table_entries_changed{0};
+  static inline std::atomic<u64> s_fastmem_backpatches{0};
+
   MMU(Core::System& system, Memory::MemoryManager& memory, PowerPC::PowerPCManager& power_pc);
   MMU(const MMU& other) = delete;
   MMU(MMU&& other) = delete;
@@ -335,9 +345,18 @@ private:
 
   void Memcheck(u32 address, u64 var, bool write, size_t size);
 
+  bool PreDirtiesPages() const;
   void ClearPageTable();
   void ReloadPageTable();
   void PageTableUpdated(std::span<const u8> page_table);
+  // Brings the mappings up to date for the one page a TLB invalidation names, looking only at
+  // the PTEGs that can hold it. Returns false if a full update is needed instead.
+  bool PageTableUpdatedForPage(u32 address);
+
+  // One entry per PTEG. While m_scan_filter_active is set, PageTableUpdated skips the rest.
+  std::vector<u8> m_scan_filter;
+  bool m_scan_filter_active = false;
+  u32 m_invalidations_since_full_scan = 0;
 
   void UpdateBATs(BatTable& bat_table, u32 base_spr);
   void UpdateFakeMMUBat(BatTable& bat_table, u32 start_addr);
@@ -359,15 +378,20 @@ private:
   std::vector<u8> m_page_table;
   // END STATE_TO_SAVE
 
+  // Games that page memory in and out change these maps constantly. Their nodes come from a pool
+  // owned by the CPU thread, so that this neither pays for the general allocator nor waits for
+  // its lock while another thread holds it.
+  std::pmr::unsynchronized_pool_resource m_mapping_pool;
+
   // This keeps track of all valid page table mappings in m_page_table.
   // The key is the logical address.
-  std::map<u32, PageMapping> m_page_mappings;
+  std::pmr::map<u32, PageMapping> m_page_mappings{&m_mapping_pool};
 
   // These are kept around just for their memory allocations. They are always cleared before use.
   std::vector<u8> m_temp_page_table;
-  std::set<u32> m_removed_mappings;
-  std::map<u32, u32> m_added_readonly_mappings;
-  std::map<u32, u32> m_added_readwrite_mappings;
+  std::pmr::set<u32> m_removed_mappings{&m_mapping_pool};
+  std::pmr::map<u32, u32> m_added_readonly_mappings{&m_mapping_pool};
+  std::pmr::map<u32, u32> m_added_readwrite_mappings{&m_mapping_pool};
 
   BatTable m_ibat_table;
   BatTable m_dbat_table;

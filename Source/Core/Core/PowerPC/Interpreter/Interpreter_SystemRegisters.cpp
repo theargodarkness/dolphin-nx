@@ -229,6 +229,26 @@ void Interpreter::mftb(Interpreter& interpreter, UGeckoInstruction inst)
   mfspr(interpreter, inst);
 }
 
+static bool IsPerformanceMonitorSPR(u32 index)
+{
+  switch (index)
+  {
+  case SPR_MMCR0:
+  case SPR_MMCR1:
+  case SPR_PMC1:
+  case SPR_PMC2:
+  case SPR_PMC3:
+  case SPR_PMC4:
+  case SPR_UPMC1:
+  case SPR_UPMC2:
+  case SPR_UPMC3:
+  case SPR_UPMC4:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void Interpreter::mfspr(Interpreter& interpreter, UGeckoInstruction inst)
 {
   auto& ppc_state = interpreter.m_ppc_state;
@@ -241,6 +261,9 @@ void Interpreter::mfspr(Interpreter& interpreter, UGeckoInstruction inst)
     GenerateProgramException(ppc_state, ProgramExceptionCause::PrivilegedInstruction);
     return;
   }
+
+  if (IsPerformanceMonitorSPR(index))
+    PowerPC::FlushPerformanceMonitor(ppc_state);
 
   switch (index)
   {
@@ -313,6 +336,11 @@ void Interpreter::mtspr(Interpreter& interpreter, UGeckoInstruction inst)
     GenerateProgramException(ppc_state, ProgramExceptionCause::PrivilegedInstruction);
     return;
   }
+
+  // What ran before this write was counted under the old settings, and must not be added on top
+  // of a new counter value.
+  if (IsPerformanceMonitorSPR(index))
+    PowerPC::FlushPerformanceMonitor(ppc_state);
 
   const u32 old_value = ppc_state.spr[index];
   ppc_state.spr[index] = ppc_state.gpr[inst.RD];

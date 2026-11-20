@@ -670,6 +670,7 @@ elseif(_M_ARM_64)
     PowerPC/JitArm64/JitArm64_LoadStore.cpp
     PowerPC/JitArm64/JitArm64_LoadStoreFloating.cpp
     PowerPC/JitArm64/JitArm64_LoadStorePaired.cpp
+    PowerPC/JitArm64/JitArm64_NativeSqrt.cpp
     PowerPC/JitArm64/JitArm64_Paired.cpp
     PowerPC/JitArm64/JitArm64_RegCache.cpp
     PowerPC/JitArm64/JitArm64_RegCache.h

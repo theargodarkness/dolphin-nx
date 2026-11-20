@@ -1,6 +1,7 @@
 // Copyright 2010 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "VideoCommon/DrawStateLog.h"
 #include "VideoCommon/TextureCacheBase.h"
 
 #include <algorithm>
@@ -2264,6 +2265,14 @@ bool TextureCacheBase::CopyFilterCanOverflow(const std::array<u32, 3>& coefficie
 
 void TextureCacheBase::CopyRenderTargetToTexture(FramebufferCopyResolvedData& resolved_data)
 {
+  DrawStateLog::RecordCopy(
+      resolved_data.source_data.dest_address, resolved_data.source_data.copy_width,
+      resolved_data.source_data.copy_height,
+      static_cast<u32>(resolved_data.source_data.efbcopy_format),
+      resolved_data.source_data.is_depth_format, resolved_data.is_xfb, resolved_data.copy_to_ram,
+      resolved_data.copy_to_vram, resolved_data.source_data.is_intensity_format,
+      resolved_data.source_data.half_scale);
+
   // Emulation methods:
   //
   // - EFB to RAM:

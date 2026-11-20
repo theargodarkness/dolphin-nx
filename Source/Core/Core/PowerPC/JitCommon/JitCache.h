@@ -4,12 +4,14 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <chrono>
 #include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -130,6 +132,13 @@ public:
   static constexpr u32 FAST_BLOCK_MAP_FALLBACK_ELEMENTS = 0x10000;
   static constexpr u32 FAST_BLOCK_MAP_FALLBACK_MASK = FAST_BLOCK_MAP_FALLBACK_ELEMENTS - 1;
 
+  // The entry point directory covers the same index space as the large map, split into pages
+  // that are only allocated once a block lands in them. One page spans 64 KiB of guest code.
+  static constexpr u32 ENTRY_POINT_PAGE_BITS = 14;
+  static constexpr size_t ENTRY_POINT_PAGE_ELEMENTS = size_t{1} << ENTRY_POINT_PAGE_BITS;
+  static constexpr size_t ENTRY_POINT_DIRECTORY_ELEMENTS = FAST_BLOCK_MAP_SIZE / sizeof(u8*) /
+                                                           ENTRY_POINT_PAGE_ELEMENTS;
+
   explicit JitBaseBlockCache(JitBase& jit);
   virtual ~JitBaseBlockCache();
 
@@ -141,6 +150,9 @@ public:
 
   // Code Cache
   u8** GetEntryPoints();
+  // Null unless the entry point directory is in use. Every element points to a page of
+  // ENTRY_POINT_PAGE_ELEMENTS entry points, so a lookup never has to check a page for null.
+  u8*** GetEntryPointDirectory();
   JitBlock** GetFastBlockMapFallback();
   void RunOnBlocks(const Core::CPUThreadGuard& guard,
                    const std::function<void(const JitBlock&)>& f) const;
@@ -169,8 +181,26 @@ public:
 
   const u32* GetBlockBitSet() const;
 
+  // How often translated code was set aside when the game replaced the code it came from, picked
+  // up again when the same code returned, and thrown away because different code returned.
+  static inline std::atomic<u32> s_blocks_set_aside{0};
+  static inline std::atomic<u32> s_blocks_reused{0};
+  static inline std::atomic<u32> s_blocks_not_reusable{0};
+
 protected:
   virtual void DestroyBlock(JitBlock& block);
+
+  // Called for invalidations that do not come from the game itself (patches, breakpoints, ...).
+  virtual void OnForcedInvalidation(u32 address, u32 length) {}
+
+  // Whether FinalizeBlock should keep the guest instructions of every block.
+  virtual bool KeepsOriginalBuffer() const { return false; }
+
+  // Makes a block with all of its fields filled in visible to lookups, invalidation and linking.
+  void RegisterBlock(JitBlock& block, bool block_link);
+
+  // Set while blocks are being destroyed because the game invalidated the code they came from.
+  bool m_guest_invalidation = false;
 
   JitBase& m_jit;
 
@@ -188,20 +218,26 @@ private:
   // Fast but risky block lookup based on fast_block_map.
   size_t FastLookupIndexForAddress(u32 address, u32 msr);
 
+  // Games that swap their code in and out destroy and recreate blocks by the thousand at a time.
+  // The nodes of the maps below come from a pool owned by the CPU thread, so that this neither
+  // pays for the general allocator nor waits for its lock while another thread holds it.
+  std::pmr::unsynchronized_pool_resource m_node_pool;
+
   // links_to hold all exit points of all valid blocks in a reverse way.
   // It is used to query all blocks which links to an address.
-  std::unordered_map<u32, std::unordered_set<JitBlock*>> links_to;  // destination_PC -> number
+  std::pmr::unordered_map<u32, std::pmr::unordered_set<JitBlock*>> links_to{
+      &m_node_pool};  // destination_PC -> number
 
   // Map indexed by the physical address of the entry point.
   // This is used to query the block based on the current PC in a slow way.
-  std::multimap<u32, JitBlock> block_map;  // start_addr -> block
+  std::pmr::multimap<u32, JitBlock> block_map{&m_node_pool};  // start_addr -> block
 
   // Range of overlapping code indexed by a masked physical address.
   // This is used for invalidation of memory regions. The range is grouped
   // in macro blocks of each 0x100 bytes.
   static constexpr u32 BLOCK_RANGE_SIZE = 0x100;
   static constexpr u32 BLOCK_RANGE_MAP_MASK = ~(BLOCK_RANGE_SIZE - 1);
-  std::map<u32, std::unordered_set<JitBlock*>> block_range_map;
+  std::pmr::map<u32, std::pmr::unordered_set<JitBlock*>> block_range_map{&m_node_pool};
 
   // This bitset shows which cachelines overlap with any blocks.
   // It is used to provide a fast way to query if no icache invalidation is needed.
@@ -213,6 +249,18 @@ private:
   // know where to jump based on pc and msr bits.
   Common::LazyMemoryRegion m_entry_points_arena;
   u8** m_entry_points_ptr = nullptr;
+
+  // The large map needs far more address space than Horizon will hand out, and the fallback map
+  // below thrashes once a game has more than a few hundred KiB of code. This gives the dispatcher
+  // the same exact lookup as the large map for two loads.
+  std::unique_ptr<u8**[]> m_entry_point_directory;
+  std::unique_ptr<u8*[]> m_empty_entry_point_page;
+  std::vector<std::unique_ptr<u8*[]>> m_entry_point_pages;
+
+  bool UsesEntryPoints() const { return m_entry_points_ptr || m_entry_point_directory; }
+  u8* GetEntryPoint(size_t index) const;
+  void SetEntryPoint(size_t index, u8* entry_point);
+  void ClearEntryPoints();
 
   // An alternative for the above but without a shm segment
   // in case the shm memory region couldn't be allocated.

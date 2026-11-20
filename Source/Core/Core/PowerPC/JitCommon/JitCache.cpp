@@ -8,6 +8,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <new>
 #include <ranges>
 #include <set>
 #include <span>
@@ -16,6 +17,7 @@
 #include "Common/Align.h"
 #include "Common/CommonTypes.h"
 #include "Common/JitRegister.h"
+#include "Common/Logging/Log.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
@@ -70,6 +72,26 @@ bool JitBaseBlockCache::Init()
     m_entry_points_ptr = static_cast<u8**>(m_entry_points_arena.Create(FAST_BLOCK_MAP_SIZE));
 #endif
 
+#ifdef __SWITCH__
+  // Kept for the life of the cache once made, as the dispatcher has its address baked in.
+  if (!m_entry_points_ptr && !m_entry_point_directory)
+  {
+    m_empty_entry_point_page.reset(new (std::nothrow) u8*[ENTRY_POINT_PAGE_ELEMENTS]());
+    m_entry_point_directory.reset(new (std::nothrow) u8**[ENTRY_POINT_DIRECTORY_ELEMENTS]);
+    if (m_empty_entry_point_page && m_entry_point_directory)
+    {
+      std::fill_n(m_entry_point_directory.get(), ENTRY_POINT_DIRECTORY_ELEMENTS,
+                  m_empty_entry_point_page.get());
+    }
+    else
+    {
+      WARN_LOG_FMT(DYNA_REC, "No memory for the entry point directory, using the fallback map");
+      m_entry_point_directory.reset();
+      m_empty_entry_point_page.reset();
+    }
+  }
+#endif
+
   Clear();
 
   return true;
@@ -78,6 +100,14 @@ bool JitBaseBlockCache::Init()
 void JitBaseBlockCache::Shutdown()
 {
   Common::JitRegister::Shutdown();
+
+  // The directory itself stays, see Init.
+  if (m_entry_point_directory)
+  {
+    std::fill_n(m_entry_point_directory.get(), ENTRY_POINT_DIRECTORY_ELEMENTS,
+                m_empty_entry_point_page.get());
+    m_entry_point_pages.clear();
+  }
 
   m_entry_points_arena.Release();
 }
@@ -102,8 +132,7 @@ void JitBaseBlockCache::Clear()
 
   valid_block.Clear();
 
-  if (m_entry_points_ptr)
-    m_entry_points_arena.Clear();
+  ClearEntryPoints();
 }
 
 void JitBaseBlockCache::Discard()
@@ -117,8 +146,8 @@ void JitBaseBlockCache::Discard()
 
   valid_block.Clear();
 
-  if (m_entry_points_ptr)
-    m_entry_points_arena.Clear();
+  if (UsesEntryPoints())
+    ClearEntryPoints();
   else
     m_fast_block_map_fallback.fill(nullptr);
 }
@@ -132,6 +161,66 @@ bool JitBaseBlockCache::Reset()
 u8** JitBaseBlockCache::GetEntryPoints()
 {
   return m_entry_points_ptr;
+}
+
+u8*** JitBaseBlockCache::GetEntryPointDirectory()
+{
+  return m_entry_points_ptr ? nullptr : m_entry_point_directory.get();
+}
+
+u8* JitBaseBlockCache::GetEntryPoint(size_t index) const
+{
+  if (m_entry_points_ptr)
+    return m_entry_points_ptr[index];
+
+  return m_entry_point_directory[index >> ENTRY_POINT_PAGE_BITS][index &
+                                                                 (ENTRY_POINT_PAGE_ELEMENTS - 1)];
+}
+
+void JitBaseBlockCache::SetEntryPoint(size_t index, u8* entry_point)
+{
+  if (m_entry_points_ptr)
+  {
+    m_entry_points_arena.EnsureMemoryPageWritable(index * sizeof(u8*));
+    m_entry_points_ptr[index] = entry_point;
+    return;
+  }
+
+  u8**& page = m_entry_point_directory[index >> ENTRY_POINT_PAGE_BITS];
+  if (page == m_empty_entry_point_page.get())
+  {
+    // The shared empty page already says there is nothing here.
+    if (!entry_point)
+      return;
+
+    std::unique_ptr<u8*[]> new_page(new (std::nothrow) u8*[ENTRY_POINT_PAGE_ELEMENTS]());
+    if (!new_page)
+    {
+      // The block stays out of the directory, so the dispatcher compiles it again whenever it
+      // is reached. That fills the code cache, and clearing the cache frees every page.
+      ERROR_LOG_FMT(DYNA_REC, "No memory for another page of entry points");
+      return;
+    }
+
+    page = new_page.get();
+    m_entry_point_pages.push_back(std::move(new_page));
+  }
+
+  page[index & (ENTRY_POINT_PAGE_ELEMENTS - 1)] = entry_point;
+}
+
+void JitBaseBlockCache::ClearEntryPoints()
+{
+  if (m_entry_points_ptr)
+  {
+    m_entry_points_arena.Clear();
+  }
+  else if (m_entry_point_directory)
+  {
+    std::fill_n(m_entry_point_directory.get(), ENTRY_POINT_DIRECTORY_ELEMENTS,
+                m_empty_entry_point_page.get());
+    m_entry_point_pages.clear();
+  }
 }
 
 JitBlock** JitBaseBlockCache::GetFastBlockMapFallback()
@@ -172,22 +261,10 @@ void JitBaseBlockCache::FinalizeBlock(JitBlock& block, bool block_link,
                                       const PPCAnalyst::CodeBlock& code_block,
                                       const PPCAnalyst::CodeBuffer& code_buffer)
 {
-  size_t index = FastLookupIndexForAddress(block.effectiveAddress, block.feature_flags);
-  if (m_entry_points_ptr)
-  {
-    m_entry_points_arena.EnsureMemoryPageWritable(index * sizeof(u8*));
-    m_entry_points_ptr[index] = block.normalEntry;
-  }
-  else
-  {
-    m_fast_block_map_fallback[index] = &block;
-  }
-  block.fast_block_map_index = index;
-
   block.physical_addresses = code_block.m_physical_addresses;
 
   block.originalSize = code_block.m_num_instructions;
-  if (m_jit.IsDebuggingEnabled())
+  if (m_jit.IsDebuggingEnabled() || KeepsOriginalBuffer())
   {
     // TODO C++23: Can do this all in one statement with `std::vector::assign_range`.
     const std::ranges::transform_view original_buffer_transform_view{
@@ -196,6 +273,18 @@ void JitBaseBlockCache::FinalizeBlock(JitBlock& block, bool block_link,
     block.original_buffer.assign(original_buffer_transform_view.begin(),
                                  original_buffer_transform_view.end());
   }
+
+  RegisterBlock(block, block_link);
+}
+
+void JitBaseBlockCache::RegisterBlock(JitBlock& block, bool block_link)
+{
+  size_t index = FastLookupIndexForAddress(block.effectiveAddress, block.feature_flags);
+  if (UsesEntryPoints())
+    SetEntryPoint(index, block.normalEntry);
+  else
+    m_fast_block_map_fallback[index] = &block;
+  block.fast_block_map_index = index;
 
   for (auto [range_start, range_end] : block.physical_addresses)
   {
@@ -258,10 +347,10 @@ JitBlock* JitBaseBlockCache::GetBlockFromStartAddress(u32 addr, CPUEmuFeatureFla
 const u8* JitBaseBlockCache::Dispatch()
 {
   const auto& ppc_state = m_jit.m_ppc_state;
-  if (m_entry_points_ptr)
+  if (UsesEntryPoints())
   {
     u8* entry_point =
-        m_entry_points_ptr[FastLookupIndexForAddress(ppc_state.pc, ppc_state.feature_flags)];
+        GetEntryPoint(FastLookupIndexForAddress(ppc_state.pc, ppc_state.feature_flags));
     if (entry_point)
     {
       return entry_point;
@@ -332,6 +421,9 @@ void JitBaseBlockCache::InvalidateICache(u32 initial_address, u32 initial_length
 void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 address, u32 length,
                                                  bool forced)
 {
+  if (forced)
+    OnForcedInvalidation(address, length);
+
   // Optimization for the case of invalidating a single cache line, which is used by the dcb*
   // instructions. If the valid_block bit for that cacheline is not set, we can safely skip
   // the remaining invalidation logic.
@@ -356,7 +448,9 @@ void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 addre
   if (destroy_block)
   {
     // destroy JIT blocks
+    m_guest_invalidation = !forced;
     ErasePhysicalRange(physical_address, length);
+    m_guest_invalidation = false;
 
     // If the code was actually modified, we need to clear the relevant entries from the
     // FIFO write address cache, so we don't end up with FIFO checks in places they shouldn't
@@ -468,6 +562,23 @@ void JitBaseBlockCache::LinkBlockExits(JitBlock& block)
   {
     if (!e.linkStatus)
     {
+#ifdef _M_ARM_64
+      if (UsesEntryPoints())
+      {
+        // The entry points are what the dispatcher itself goes by, and looking one up needs
+        // neither an address translation nor a search. Linking only needs the entry point.
+        u8* const entry_point =
+            GetEntryPoint(FastLookupIndexForAddress(e.exitAddress, block.feature_flags));
+        if (entry_point)
+        {
+          JitBlock destination(false);
+          destination.normalEntry = entry_point;
+          WriteLinkBlock(e, &destination);
+          e.linkStatus = true;
+        }
+        continue;
+      }
+#endif
       JitBlock* destinationBlock = GetBlockFromStartAddress(e.exitAddress, block.feature_flags);
       if (destinationBlock)
       {
@@ -522,12 +633,10 @@ void JitBaseBlockCache::UnlinkBlock(const JitBlock& block)
 
 void JitBaseBlockCache::DestroyBlock(JitBlock& block)
 {
-  if (m_entry_points_ptr)
+  if (UsesEntryPoints())
   {
-    if (m_entry_points_ptr[block.fast_block_map_index] == block.normalEntry)
-    {
-      m_entry_points_ptr[block.fast_block_map_index] = nullptr;
-    }
+    if (GetEntryPoint(block.fast_block_map_index) == block.normalEntry)
+      SetEntryPoint(block.fast_block_map_index, nullptr);
   }
   else
   {
@@ -562,12 +671,10 @@ JitBlock* JitBaseBlockCache::MoveBlockIntoFastCache(u32 addr, CPUEmuFeatureFlags
     return nullptr;
 
   // Drop old fast block map entry
-  if (m_entry_points_ptr)
+  if (UsesEntryPoints())
   {
-    if (m_entry_points_ptr[block->fast_block_map_index] == block->normalEntry)
-    {
-      m_entry_points_ptr[block->fast_block_map_index] = nullptr;
-    }
+    if (GetEntryPoint(block->fast_block_map_index) == block->normalEntry)
+      SetEntryPoint(block->fast_block_map_index, nullptr);
   }
   else
   {
@@ -579,15 +686,10 @@ JitBlock* JitBaseBlockCache::MoveBlockIntoFastCache(u32 addr, CPUEmuFeatureFlags
 
   // And create a new one
   size_t index = FastLookupIndexForAddress(addr, feature_flags);
-  if (m_entry_points_ptr)
-  {
-    m_entry_points_arena.EnsureMemoryPageWritable(index * sizeof(u8*));
-    m_entry_points_ptr[index] = block->normalEntry;
-  }
+  if (UsesEntryPoints())
+    SetEntryPoint(index, block->normalEntry);
   else
-  {
     m_fast_block_map_fallback[index] = block;
-  }
   block->fast_block_map_index = index;
 
   return block;
@@ -595,7 +697,7 @@ JitBlock* JitBaseBlockCache::MoveBlockIntoFastCache(u32 addr, CPUEmuFeatureFlags
 
 size_t JitBaseBlockCache::FastLookupIndexForAddress(u32 address, u32 feature_flags)
 {
-  if (m_entry_points_ptr)
+  if (UsesEntryPoints())
   {
     return (static_cast<size_t>(feature_flags) << 30) | (address >> 2);
   }

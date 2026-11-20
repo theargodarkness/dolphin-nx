@@ -23,6 +23,14 @@ enum class Kind
   Wiimote,
 };
 
+// How a profile expects its controller to be held. Anything but Paired is a single Joy-Con.
+enum class JoyConGrip
+{
+  Paired,
+  Upright,
+  Sideways,
+};
+
 constexpr int SLOT_COUNT = 4;
 
 std::string GetKindLabel(Kind kind);
@@ -48,6 +56,10 @@ bool Save(Kind kind, const std::string& name, ControllerEmu::EmulatedController&
 std::string GetGlobalProfile(Kind kind, int slot);
 void SetGlobalProfile(Kind kind, int slot, const std::string& name);
 const Config::Info<std::string>& GetGameProfileInfo(Kind kind, int slot);
+
+// The profile a slot ends up with once the running game's own choice is taken into account.
+std::string GetActiveProfile(Kind kind, int slot);
+JoyConGrip GetJoyConGrip(const std::string& wiimote_profile);
 
 void WritePresets();
 

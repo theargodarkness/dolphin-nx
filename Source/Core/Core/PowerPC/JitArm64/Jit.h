@@ -296,8 +296,11 @@ protected:
   // jumps to the returned FixupBranch. Clobbers tmp and the 17 lower bits of addr_out.
   Arm64Gen::FixupBranch BATAddressLookup(Arm64Gen::ARM64Reg addr_out, Arm64Gen::ARM64Reg addr_in,
                                          Arm64Gen::ARM64Reg tmp, const void* bat_table);
+  // With check_page_table, addresses a page table mapping covers pass too, provided the access
+  // is at most 32 bytes long.
   Arm64Gen::FixupBranch CheckIfSafeAddress(Arm64Gen::ARM64Reg addr, Arm64Gen::ARM64Reg tmp1,
-                                           Arm64Gen::ARM64Reg tmp2);
+                                           Arm64Gen::ARM64Reg tmp2, bool check_page_table = false,
+                                           bool store = false);
 
   bool DoJit(u32 em_address, JitBlock* b, u32 nextPC);
 
@@ -333,6 +336,11 @@ protected:
   void GenerateConvertDoubleToSingle();
   void GenerateConvertSingleToDouble();
   void GenerateFPRF(bool single);
+  void GenerateResolveLazyFPRF();
+
+  // Emits a shortcut ahead of the instruction at op_index if a known software square root
+  // routine starts there.
+  void EmitNativeSqrt(u32 op_index);
   void GenerateFmaddsEft();
   void GeneratePsMaddEft();
   void GenerateQuantizedLoads();
@@ -408,6 +416,8 @@ protected:
   bool MultiplyImmediate(u32 imm, int a, int d, bool rc);
 
   void SetFPRFIfNeeded(bool single, Arm64Gen::ARM64Reg reg);
+  // Emits a call that brings FPSCR.FPRF up to date. Call it before any register is bound.
+  void ResolveLazyFPRF();
   void Force25BitPrecision(Arm64Gen::ARM64Reg output, Arm64Gen::ARM64Reg input);
 
   // The keys store the entry point of a block. Lookups find the currently running block through

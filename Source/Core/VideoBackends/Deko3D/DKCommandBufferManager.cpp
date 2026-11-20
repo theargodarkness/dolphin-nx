@@ -258,6 +258,8 @@ void DKCommandBufferManager::BeginCommandBuffer()
   const u32 next_buffer_index = (m_current_cmd_buffer + 1) % NUM_COMMAND_BUFFERS;
   CmdBufferResources& resources = m_command_buffers[next_buffer_index];
 
+  PollCompletedFences();
+
   // Wait for the GPU to finish with everything the memory we are about to reuse still backs.
   if (resources.fence_counter > m_completed_fence_counter)
     WaitForCommandBufferCompletion(next_buffer_index);
@@ -279,7 +281,11 @@ void DKCommandBufferManager::WaitForCommandBufferCompletion(u32 index)
   if (res != DkResult_Success)
     ERROR_LOG_FMT(VIDEO, "deko3d: dkFenceWait failed ({})", static_cast<int>(res));
 
-  const u64 now_completed_counter = resources.fence_counter;
+  RetireCommandBuffers(resources.fence_counter);
+}
+
+void DKCommandBufferManager::RetireCommandBuffers(u64 now_completed_counter)
+{
   for (u32 retired_index = 0; retired_index < NUM_COMMAND_BUFFERS; ++retired_index)
   {
     CmdBufferResources& retired = m_command_buffers[retired_index];
@@ -292,7 +298,29 @@ void DKCommandBufferManager::WaitForCommandBufferCompletion(u32 index)
     retired.cleanup_resources.clear();
   }
 
-  m_completed_fence_counter = now_completed_counter;
+  m_completed_fence_counter = std::max(m_completed_fence_counter, now_completed_counter);
+}
+
+void DKCommandBufferManager::PollCompletedFences()
+{
+  // Nothing else notices a command buffer finishing: the completed counter otherwise only moves
+  // when something waits, which left it up to NUM_COMMAND_BUFFERS - 1 submissions behind and made
+  // the stream buffers believe the GPU still needed data it was long done with. Asking deko3d
+  // with no timeout is a read of memory the GPU writes, not a call to the driver.
+  u64 newly_completed = 0;
+  for (u32 index = (m_current_cmd_buffer + 1) % NUM_COMMAND_BUFFERS; index != m_current_cmd_buffer;
+       index = (index + 1) % NUM_COMMAND_BUFFERS)
+  {
+    CmdBufferResources& resources = m_command_buffers[index];
+    if (resources.fence_counter <= m_completed_fence_counter)
+      continue;
+    if (dkFenceWait(&resources.fence, 0) != DkResult_Success)
+      break;
+    newly_completed = resources.fence_counter;
+  }
+
+  if (newly_completed != 0)
+    RetireCommandBuffers(newly_completed);
 }
 
 void DKCommandBufferManager::WaitForFenceCounter(u64 fence_counter)

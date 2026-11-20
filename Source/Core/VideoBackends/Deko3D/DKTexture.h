@@ -18,11 +18,16 @@
 
 namespace Deko3D
 {
+// Frees the large blocks that ordinary textures share. Call once the command buffer manager is
+// gone and before the device is.
+void ClearTextureMemoryPool();
+
 class DKTexture final : public AbstractTexture
 {
 public:
   DKTexture(const TextureConfig& config, dk::UniqueMemBlock memblock, const dk::ImageLayout& layout,
-            const dk::Image& image, const DkImageDescriptor& descriptor);
+            const dk::Image& image, const DkImageDescriptor& descriptor,
+            void* shared_chunk = nullptr, u32 shared_offset = 0, u32 shared_size = 0);
   ~DKTexture() override;
 
   static std::unique_ptr<DKTexture> Create(const TextureConfig& config, std::string_view name);
@@ -56,6 +61,10 @@ private:
   dk::UniqueMemBlock m_memblock;
   dk::ImageLayout m_layout;
   dk::Image m_image;
+  // Set instead of m_memblock when the image lives in a block shared with other textures.
+  void* m_shared_chunk = nullptr;
+  u32 m_shared_offset = 0;
+  u32 m_shared_size = 0;
 
   // Baked sampling descriptor. The state tracker copies this into the frame's descriptor set.
   DkImageDescriptor m_descriptor;

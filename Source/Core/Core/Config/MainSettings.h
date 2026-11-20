@@ -59,6 +59,7 @@ extern const Info<PowerPC::CPUCore> MAIN_CPU_CORE;
 extern const Info<bool> MAIN_JIT_FOLLOW_BRANCH;
 extern const Info<bool> MAIN_FASTMEM;
 extern const Info<bool> MAIN_PAGE_TABLE_FASTMEM;
+extern const Info<bool> MAIN_JIT_REUSE_TRANSLATED_CODE;
 extern const Info<bool> MAIN_FASTMEM_ARENA;
 extern const Info<bool> MAIN_LARGE_ENTRY_POINTS_MAP;
 extern const Info<bool> MAIN_ACCURATE_CPU_CACHE;
@@ -70,6 +71,9 @@ extern const Info<bool> MAIN_CORRECT_TIME_DRIFT;
 extern const Info<bool> MAIN_RUSH_FRAME_PRESENTATION;
 extern const Info<bool> MAIN_SMOOTH_EARLY_PRESENTATION;
 extern const Info<bool> MAIN_CPU_THREAD;
+// Ignores CPUThread = False in the game settings that ship with the emulator. The user's own
+// per-game setting still applies.
+extern const Info<bool> MAIN_OVERRIDE_SINGLE_CORE_GAMES;
 extern const Info<bool> MAIN_LOAD_GAME_INTO_MEMORY;
 extern const Info<bool> MAIN_SYNC_ON_SKIP_IDLE;
 extern const Info<std::string> MAIN_DEFAULT_ISO;
@@ -133,6 +137,8 @@ extern const Info<bool> MAIN_LOW_DCBZ_HACK;
 extern const Info<bool> MAIN_FLOAT_EXCEPTIONS;
 extern const Info<bool> MAIN_DIVIDE_BY_ZERO_EXCEPTIONS;
 extern const Info<bool> MAIN_FPRF;
+// Lets JitArm64 answer a game's software square root routine with the host's instruction.
+extern const Info<bool> MAIN_JIT_NATIVE_SQRT;
 extern const Info<bool> MAIN_ACCURATE_NANS;
 extern const Info<bool> MAIN_ACCURATE_FMADDS;
 extern const Info<bool> MAIN_DISABLE_ICACHE;

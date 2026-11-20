@@ -79,10 +79,15 @@ void FileLogger::Log(const DiscIO::Volume& volume, const DiscIO::Partition& part
   const std::string size_string = Common::ThousandSeparate(file_info->GetSize() / 1000, 7);
   const std::string path = file_info->GetPath();
   const std::string log_string = fmt::format("{} kB {}", size_string, path);
+#ifdef __SWITCH__
+  // The log file is flushed to the SD card per line, which is too slow to do per file access.
+  INFO_LOG_FMT(FILEMON, "{}", log_string);
+#else
   if (IsSoundFile(path))
     INFO_LOG_FMT(FILEMON, "{}", log_string);
   else
     WARN_LOG_FMT(FILEMON, "{}", log_string);
+#endif
 
   // Update the last accessed file
   m_previous_partition = partition;

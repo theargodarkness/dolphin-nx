@@ -313,6 +313,7 @@ struct VideoConfig final
   bool bPerfQueriesEnable = false;
   bool bBBoxEnable = false;
   bool bCPUCull = false;
+  bool bVertexDepthClamp = true;
 
   bool bEFBEmulateFormatChanges = false;
   bool bSkipEFBCopyToRam = false;

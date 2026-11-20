@@ -38,6 +38,8 @@ public:
   u64 GetCurrentFenceCounter() const;
 
   void WaitForFenceCounter(u64 fence_counter);
+  // Brings GetCompletedFenceCounter() up to date without waiting for anything.
+  void PollCompletedFences();
 
   // Makes the fence for the current command buffer flush GPU writes for CPU readback.
   void NotifyCpuReadback();
@@ -98,6 +100,7 @@ private:
   bool CreateCommandBuffers();
   void BeginCommandBuffer();
   void WaitForCommandBufferCompletion(u32 index);
+  void RetireCommandBuffers(u64 now_completed_counter);
 
   bool CreateTimestampMemory();
   void WriteBeginTimestamp(u32 index);

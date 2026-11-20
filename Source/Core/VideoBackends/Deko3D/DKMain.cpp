@@ -14,6 +14,7 @@
 #include "VideoBackends/Deko3D/DKPerfQuery.h"
 #include "VideoBackends/Deko3D/DKStateTracker.h"
 #include "VideoBackends/Deko3D/DKSwapChain.h"
+#include "VideoBackends/Deko3D/DKTexture.h"
 #include "VideoBackends/Deko3D/DKVertexManager.h"
 
 #include "VideoCommon/VideoCommon.h"
@@ -150,6 +151,8 @@ void VideoBackend::Shutdown()
   DKStateTracker::DestroyInstance();
   g_dk_object_cache.reset();
   g_dk_command_buffer_mgr.reset();
+  // Destroying the manager ran the last deferred cleanups, which may have refilled the pool.
+  ClearTextureMemoryPool();
   g_dk_context.reset();
 }
 }  // namespace Deko3D

@@ -286,6 +286,15 @@ void SConfig::SetRunningGameMetadata(const std::string& game_id, const std::stri
   Config::AddLayer(ConfigLoaders::GenerateGlobalGameConfigLoader(game_id, revision));
   Config::AddLayer(ConfigLoaders::GenerateLocalGameConfigLoader(game_id, revision));
 
+  // Dropping the shipped default leaves the user's global and per-game choices in charge.
+  if (Config::Get(Config::MAIN_OVERRIDE_SINGLE_CORE_GAMES) &&
+      Config::GetLayer(Config::LayerType::GlobalGame)
+          ->DeleteKey(Config::MAIN_CPU_THREAD.GetLocation()))
+  {
+    NOTICE_LOG_FMT(CORE, "Ignoring this game's bundled single core setting");
+    Config::OnConfigChanged();
+  }
+
   if (is_running_or_starting)
     DolphinAnalytics::Instance().ReportGameStart();
 }

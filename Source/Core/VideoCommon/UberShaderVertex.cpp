@@ -414,6 +414,17 @@ float3 load_input_float3_rawtex(uint vtx_offset, uint attr_offset) {{
               "o.WorldPos = pos.xyz;\n");
   }
 
+  if (host_config.vertex_depth_clamp)
+  {
+    // The console clips to -w <= z <= 0 and then clamps the depth the viewport's depth range turns
+    // that into. A host without depth clamping clips to the depth range instead, which drops
+    // geometry the console draws: anything the depth range pushes past either end, and anything
+    // sitting exactly on an end that rounding nudges over it. Clamping each vertex that is inside
+    // the console's clip volume gets flat geometry such as menus and HUDs right.
+    out.Write("float vdcDepth = o.pos.z * (1.0 - 1e-7);\n"
+              "bool vdcInside = o.pos.w > 0.0 && vdcDepth + o.pos.w >= 0.0 && vdcDepth <= 0.0;\n");
+  }
+
   // If we can disable the incorrect depth clipping planes using depth clamping, then we can do
   // our own depth clipping and calculate the depth range before the perspective divide if
   // necessary.
@@ -454,6 +465,9 @@ float3 load_input_float3_rawtex(uint vtx_offset, uint attr_offset) {{
     // operation that can introduce a round-trip error.
     out.Write("o.pos.z = o.pos.z * 2.0 - o.pos.w;\n");
   }
+
+  if (host_config.vertex_depth_clamp)
+    out.Write("if (vdcInside) o.pos.z = clamp(o.pos.z, 0.0, o.pos.w);\n");
 
   // Correct for negative viewports by mirroring all vertices. We need to negate the height here,
   // since the viewport height is already negated by the render backend.

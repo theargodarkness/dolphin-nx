@@ -36,6 +36,7 @@
 #ifdef HAS_LIBMGBA
 #include "DolphinSwitch/GBAOverlaySwitch.h"
 #endif
+#include "DolphinSwitch/JoyConsSwitch.h"
 #include "DolphinSwitch/SettingsSwitch.h"
 #include "InputCommon/ControllerEmu/ControllerEmu.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -1135,6 +1136,10 @@ void PauseMenu::ApplyProfile(Kind kind, int slot, const std::string& name)
   controller->UpdateReferences(g_controller_interface);
 
   WriteForGame(ControllerProfiles::GetGameProfileInfo(kind, slot), name);
+
+  // A different profile can mean a different grip.
+  if (kind == Kind::Wiimote)
+    JoyCons::Update();
 }
 
 void PauseMenu::FindDiscs()

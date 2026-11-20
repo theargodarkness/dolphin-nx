@@ -303,7 +303,9 @@ void CachedInterpreter::Jit(u32 em_address, bool clear_cache_and_retry_on_failur
     m_ppc_state.npc = nextPC;
     m_ppc_state.Exceptions |= EXCEPTION_ISI;
     m_system.GetPowerPC().CheckExceptions();
-    WARN_LOG_FMT(POWERPC, "ISI exception at {:#010x}", nextPC);
+    // Games that page their own code in get here constantly, and the file log is flushed to
+    // storage on every line, so this cannot be a warning.
+    DEBUG_LOG_FMT(POWERPC, "ISI exception at {:#010x}", nextPC);
     return;
   }
 

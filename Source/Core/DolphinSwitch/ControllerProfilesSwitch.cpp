@@ -42,10 +42,10 @@ using WiimoteEmu::WiimoteGroup;
 constexpr std::string_view PRESET_PREFIX = "Switch - ";
 const std::string GC_PRESET = "Switch - GameCube controller";
 
-constexpr std::array WIIMOTE_LAYOUTS{WiimoteLayout::Vertical,       WiimoteLayout::Sideways,
-                                     WiimoteLayout::SidewaysJoyCon, WiimoteLayout::Nunchuk,
-                                     WiimoteLayout::Classic,        WiimoteLayout::RealSideways,
-                                     WiimoteLayout::RealNunchuk};
+constexpr std::array WIIMOTE_LAYOUTS{
+    WiimoteLayout::Vertical,      WiimoteLayout::Sideways, WiimoteLayout::SidewaysJoyCon,
+    WiimoteLayout::UprightJoyCon, WiimoteLayout::Nunchuk,  WiimoteLayout::Classic,
+    WiimoteLayout::RealSideways,  WiimoteLayout::RealNunchuk};
 
 const std::array<Config::Info<std::string>, SLOT_COUNT> GAME_PAD_PROFILE_INFOS{
     Config::Info<std::string>{{Config::System::GameSettingsOnly, "Controls", "PadProfile1"}, ""},
@@ -90,6 +90,8 @@ std::string GetLayoutLabel(WiimoteLayout layout)
     return "Sideways Wii Remote";
   case WiimoteLayout::SidewaysJoyCon:
     return "Sideways Joy-Con";
+  case WiimoteLayout::UprightJoyCon:
+    return "Upright Joy-Con";
   case WiimoteLayout::Nunchuk:
     return "Wii Remote and Nunchuk";
   case WiimoteLayout::Classic:
@@ -221,6 +223,23 @@ void BindSidewaysJoyCon(WiimoteEmu::Wiimote& wiimote)
   BindSidewaysMotion(wiimote);
 }
 
+// One Joy-Con held like a Wii Remote. The Upright inputs follow the hand, so a left and a right
+// Joy-Con share this layout: the stick is the D-pad, the face button under the thumb is A and the
+// trigger is B. Gyro aims the pointer.
+void BindUprightJoyCon(WiimoteEmu::Wiimote& wiimote)
+{
+  Bind(wiimote.GetWiimoteGroup(WiimoteGroup::Buttons),
+       {"`Upright Right`", "`Upright Trigger`", "`Upright Left`", "`Upright Down`", "`Upright Up`",
+        "`Upright Menu`", "`Upright Stick Click`"});
+
+  Bind(wiimote.GetWiimoteGroup(WiimoteGroup::DPad), {"`Upright Stick Y+`", "`Upright Stick Y-`",
+                                                     "`Upright Stick X-`", "`Upright Stick X+`"});
+
+  BindShake(wiimote.GetWiimoteGroup(WiimoteGroup::Shake), "`SL` | `SR`");
+  BindVerticalMotion(wiimote);
+  Bind(wiimote.GetWiimoteGroup(WiimoteGroup::IMUPoint), {"`Upright Shoulder`"});
+}
+
 void BindNunchukExtension(WiimoteEmu::Wiimote& wiimote)
 {
   Bind(wiimote.GetNunchukGroup(NunchukGroup::Buttons), {"`L`", "`ZL`"});
@@ -307,6 +326,9 @@ void SaveWiimoteLayout(WiimoteLayout layout, Common::IniFile::Section* section)
     break;
   case WiimoteLayout::SidewaysJoyCon:
     BindSidewaysJoyCon(wiimote);
+    break;
+  case WiimoteLayout::UprightJoyCon:
+    BindUprightJoyCon(wiimote);
     break;
   case WiimoteLayout::Nunchuk:
     BindNunchuk(wiimote);
@@ -595,6 +617,24 @@ const Config::Info<std::string>& GetGameProfileInfo(Kind kind, int slot)
 {
   return kind == Kind::GCPad ? GAME_PAD_PROFILE_INFOS.at(slot) :
                                GAME_WIIMOTE_PROFILE_INFOS.at(slot);
+}
+
+std::string GetActiveProfile(Kind kind, int slot)
+{
+  // Mirrors InputConfig, which ignores a game's profile when the file is gone.
+  const std::string name = Config::Get(GetGameProfileInfo(kind, slot));
+  return Exists(kind, name) ? name : GetGlobalProfile(kind, slot);
+}
+
+JoyConGrip GetJoyConGrip(const std::string& wiimote_profile)
+{
+  // Profiles the user derived from a single Joy-Con preset keep its grip.
+  const std::string preset = GetPreset(Kind::Wiimote, wiimote_profile);
+  if (preset == GetLayoutProfileName(WiimoteLayout::UprightJoyCon))
+    return JoyConGrip::Upright;
+  if (preset == GetLayoutProfileName(WiimoteLayout::SidewaysJoyCon))
+    return JoyConGrip::Sideways;
+  return JoyConGrip::Paired;
 }
 
 void WritePresets()

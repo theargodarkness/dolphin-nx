@@ -179,6 +179,7 @@ protected:
   bool m_fprf = false;
   bool m_accurate_nans = false;
   bool m_accurate_fmadds = false;
+  bool m_native_sqrt = false;
   bool m_fastmem_enabled = false;
   bool m_page_table_fastmem_enabled = false;
   bool m_accurate_cpu_cache_enabled = false;
@@ -190,7 +191,7 @@ protected:
   Common::HorizonJitStack::Stack m_jit_stack;
 #endif
 
-  static const std::array<std::pair<bool JitBase::*, const Config::Info<bool>*>, 25> JIT_SETTINGS;
+  static const std::array<std::pair<bool JitBase::*, const Config::Info<bool>*>, 27> JIT_SETTINGS;
 
   [[nodiscard]] bool CheckValidity() const;
 
@@ -262,6 +263,8 @@ public:
 
   // This should probably be removed from public:
   JitOptions jo{};
+  // Whether the block cache may put translated code back in service. See JitArm64BlockCache.
+  bool m_reuse_translated_code = false;
   JitState js{};
 
   Core::System& m_system;

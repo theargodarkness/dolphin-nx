@@ -211,6 +211,8 @@ add_library(videocommon
   VertexLoader_Position.h
   VertexLoader_TextCoord.cpp
   VertexLoader_TextCoord.h
+  DrawStateLog.cpp
+  DrawStateLog.h
   VertexManagerBase.cpp
   VertexManagerBase.h
   VertexShaderGen.cpp

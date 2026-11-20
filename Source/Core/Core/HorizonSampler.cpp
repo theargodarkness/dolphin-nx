@@ -52,8 +52,10 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/JitCommon/JitCache.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "VideoCommon/DrawStateLog.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/VertexLoaderManager.h"
@@ -88,6 +90,10 @@ constexpr std::size_t MIN_SAMPLES = 4 * 1024;
 constexpr std::size_t MAX_REPORTED_BLOCKS = 24;
 constexpr std::size_t MAX_LISTED_BLOCKS = 60;
 constexpr std::size_t MAX_BLOCK_INSTRUCTIONS = 2048;
+// Guest code is listed around the hottest blocks, far enough either side to take in the whole
+// function a hot loop sits in.
+constexpr std::size_t MAX_GUEST_LISTINGS = 10;
+constexpr u32 GUEST_LISTING_BYTES_EACH_WAY = 0x200;
 constexpr std::size_t MAX_LISTED_UNKNOWN = 12;
 constexpr std::size_t MAX_LISTED_LOADERS = 20;
 constexpr std::size_t MAX_REPORTED_LOADERS = 6;
@@ -132,6 +138,8 @@ struct Bucket
   s64 emulated_ticks = 0;
   u64 gpu_busy_ns = 0;
   u64 presents = 0;
+  // How many samples had been taken when this bucket closed.
+  std::size_t sample_count = 0;
   std::array<u64, MAX_THREADS> thread_ticks{};
 };
 
@@ -142,6 +150,10 @@ struct HotBlock
   u64 self = 0;
   u64 inclusive = 0;
   std::vector<std::pair<u32, u64>> instructions;
+  // PowerPC instruction words from guest_listing_start on, with zero for any that could not be
+  // read. Empty unless this is one of the hottest blocks.
+  u32 guest_listing_start = 0;
+  std::vector<u32> guest_listing;
 };
 
 struct BlockLabel
@@ -429,6 +441,7 @@ void RecordBucket()
     bucket.emulated_ticks = __atomic_load_n(s_capture.global_timer, __ATOMIC_RELAXED);
   bucket.gpu_busy_ns = g_stats.gpu_busy_ns_total.load(std::memory_order_relaxed);
   bucket.presents = g_stats.presents_total.load(std::memory_order_relaxed);
+  bucket.sample_count = s_capture.sample_count;
 
   for (std::size_t i = 0; i < MAX_THREADS; ++i)
   {
@@ -631,6 +644,24 @@ void ResolveBlocks(Core::System& system)
     }
   }
 
+  std::size_t listings = 0;
+  for (const auto& [range, index] : by_self)
+  {
+    HotBlock& block = s_capture.hot_blocks[index];
+    if (block.self == 0 || block.far_code)
+      continue;
+    if (listings++ == MAX_GUEST_LISTINGS)
+      break;
+
+    block.guest_listing_start = (block.guest_address & ~3u) - GUEST_LISTING_BYTES_EACH_WAY;
+    for (u32 offset = 0; offset < GUEST_LISTING_BYTES_EACH_WAY * 2; offset += sizeof(u32))
+    {
+      const auto word =
+          PowerPC::MMU::HostTryReadInstruction(guard, block.guest_listing_start + offset);
+      block.guest_listing.push_back(word ? word->value : 0);
+    }
+  }
+
   s_capture.blocks_resolved = true;
 }
 
@@ -770,7 +801,7 @@ double CpuShare(const ThreadRecord& thread)
 void AppendSummary(std::string& out, const std::vector<std::size_t>& order,
                    const std::vector<u64>& sample_counts, const std::vector<u64>& blocked_counts)
 {
-  out += fmt::format("Nezumiiruka profile started {}: {:.2f} s, {} sampling rounds (~{} ms apart), "
+  out += fmt::format("dolphin-nx profile started {}: {:.2f} s, {} sampling rounds (~{} ms apart), "
                      "{} samples, {} dropped (buffer holds {})\n",
                      s_capture.started_at, s_capture.elapsed, s_capture.rounds,
                      SAMPLE_PERIOD_NS / 1'000'000, s_capture.sample_count,
@@ -885,6 +916,86 @@ void AppendTimeline(std::string& out, const std::vector<std::size_t>& order)
         out += fmt::format("  {:4.0f}%", 100.0 * (after - before) / wall_ticks);
     }
     out += "\n";
+  }
+}
+
+// A stall of a fraction of a second vanishes in the whole-capture totals. This lists where the
+// busiest threads were during the slowest row of the timeline only.
+void AppendSlowestBucket(std::string& out, const std::vector<std::size_t>& order)
+{
+  if (s_capture.ticks_per_second == 0 || s_capture.buckets.size() < 3)
+    return;
+
+  std::size_t slowest = 0;
+  double slowest_speed = 0.0;
+  // The first row is skipped: it absorbs whatever built up while the pause menu was open.
+  for (std::size_t b = 2; b < s_capture.buckets.size(); ++b)
+  {
+    const Bucket& previous = s_capture.buckets[b - 1];
+    const Bucket& bucket = s_capture.buckets[b];
+    const double wall = TicksToSeconds(bucket.wall_ticks - previous.wall_ticks);
+    if (wall <= 0.0 || bucket.sample_count <= previous.sample_count)
+      continue;
+
+    const double speed = static_cast<double>(bucket.emulated_ticks - previous.emulated_ticks) /
+                         s_capture.ticks_per_second / wall;
+    if (slowest == 0 || speed < slowest_speed)
+    {
+      slowest = b;
+      slowest_speed = speed;
+    }
+  }
+  if (slowest == 0)
+    return;
+
+  const std::size_t first = s_capture.buckets[slowest - 1].sample_count;
+  const std::size_t last = std::min(s_capture.buckets[slowest].sample_count, Samples().size());
+  const double end_time = TicksToSeconds(s_capture.buckets[slowest].wall_ticks -
+                                         s_capture.buckets.front().wall_ticks);
+
+  out += fmt::format("\nSlowest row of the timeline: t = {:.2f}, speed {:.0f}%. Stacks from that "
+                     "row only, for the busiest threads.\n",
+                     end_time, slowest_speed * 100.0);
+
+  constexpr std::size_t MAX_THREADS_LISTED = 5;
+  constexpr std::size_t MAX_STACKS_LISTED = 12;
+  constexpr std::size_t MAX_STACKS_LISTED_IN_FULL = 400;
+  for (std::size_t column = 0; column < std::min(order.size(), MAX_THREADS_LISTED); ++column)
+  {
+    std::map<std::string, u64> stacks;
+    u64 total = 0;
+    for (std::size_t i = first; i < last; ++i)
+    {
+      const Sample& sample = Samples()[i];
+      if (sample.thread != order[column])
+        continue;
+      ++total;
+
+      std::string key = sample.blocked ? fmt::format("svc:{:x}", sample.svc) : "run";
+      key += ' ';
+      key += Label(sample.pc);
+      if (KeepLinkRegister(sample))
+        key += " L" + Label(sample.lr);
+      for (u8 frame = 0; frame < sample.depth; ++frame)
+        key += ' ' + Label(sample.frames[frame]);
+      ++stacks[std::move(key)];
+    }
+    if (total == 0)
+      continue;
+
+    std::vector<std::pair<std::string_view, u64>> by_count(stacks.begin(), stacks.end());
+    std::sort(by_count.begin(), by_count.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    // A row is short enough that the two busiest threads can be listed in full, which is what
+    // it takes to see where a stall that is spread over many places went.
+    const std::size_t max_stacks = column < 2 ? MAX_STACKS_LISTED_IN_FULL : MAX_STACKS_LISTED;
+    if (by_count.size() > max_stacks)
+      by_count.resize(max_stacks);
+
+    out += fmt::format("  T{}: {} ({} samples)\n", column,
+                       s_capture.threads[order[column]].info.name.data(), total);
+    for (const auto& [key, count] : by_count)
+      out += fmt::format("    {} {}\n", count, key);
   }
 }
 
@@ -1006,6 +1117,23 @@ void AppendBlocks(std::string& out, u64 cpu_samples)
       offset += sizeof(u32);
     }
   }
+
+  for (const HotBlock& block : s_capture.hot_blocks)
+  {
+    if (block.guest_listing.empty())
+      continue;
+
+    out += fmt::format("\nGuest code around block {:08x}, PowerPC instruction words from {:08x}. "
+                       "Zero where memory could not be read.\n",
+                       block.guest_address, block.guest_listing_start);
+    for (std::size_t i = 0; i < block.guest_listing.size(); i += 8)
+    {
+      out += fmt::format("  {:08x} ", block.guest_listing_start + static_cast<u32>(i * 4));
+      for (std::size_t j = i; j < std::min(i + 8, block.guest_listing.size()); ++j)
+        out += fmt::format(" {:08x}", block.guest_listing[j]);
+      out += '\n';
+    }
+  }
 }
 
 void AppendLoaders(std::string& out)
@@ -1112,6 +1240,7 @@ std::string BuildReport()
   std::string out;
   AppendSummary(out, order, sample_counts, blocked_counts);
   AppendTimeline(out, order);
+  AppendSlowestBucket(out, order);
 
   for (std::size_t column = 0; column < order.size(); ++column)
   {
@@ -1127,6 +1256,7 @@ std::string BuildReport()
 
   AppendLoaders(out);
   AppendUnknownCode(out);
+  out += DrawStateLog::Finish();
   return out;
 }
 
@@ -1220,10 +1350,29 @@ std::string DescribeEmulation(Core::System& system)
                      100.0f * Config::Get(Config::MAIN_EMULATION_SPEED),
                      OnOff(Config::Get(Config::MAIN_ENABLE_CHEATS)));
 
-  out += fmt::format("fastmem {}, page table fastmem {}, arena {}\n",
+  out += fmt::format("fastmem {}, page table fastmem {} ({} pages mapped{}), arena {}\n",
                      OnOff(Config::Get(Config::MAIN_FASTMEM)),
                      OnOff(Config::Get(Config::MAIN_PAGE_TABLE_FASTMEM)),
+                     system.GetMemory().GetPageTableMappingCount(),
+                     Memory::MemoryManager::SupportsReadOnlyMappings() ? "" : ", marked changed",
                      system.GetMemory().GetLogicalBase() != nullptr ? "mapped" : "not mapped");
+
+  out += fmt::format(
+      "reuse translated code {} ({} blocks set aside, {} reused, {} not reusable)\n",
+      OnOff(Config::Get(Config::MAIN_JIT_REUSE_TRANSLATED_CODE)),
+      JitBaseBlockCache::s_blocks_set_aside.load(std::memory_order_relaxed),
+      JitBaseBlockCache::s_blocks_reused.load(std::memory_order_relaxed),
+      JitBaseBlockCache::s_blocks_not_reusable.load(std::memory_order_relaxed));
+
+  out += fmt::format(
+      "totals since launch: TLB invalidations {} while translating + {} in real mode, page table "
+      "scans {} ({} KiB compared, {} entries changed), fast memory accesses turned slow {}\n",
+      PowerPC::MMU::s_tlb_invalidations_translating.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_tlb_invalidations_real_mode.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_page_table_scans.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_page_table_scan_bytes.load(std::memory_order_relaxed) / 1024,
+      PowerPC::MMU::s_page_table_entries_changed.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_fastmem_backpatches.load(std::memory_order_relaxed));
 
   const int efb_scale = Config::Get(Config::GFX_EFB_SCALE);
   out += fmt::format("video: internal resolution {}, MSAA {}x{}, shaders {}, frame generation ",
@@ -1237,7 +1386,8 @@ std::string DescribeEmulation(Core::System& system)
 
   out += fmt::format("hacks: skip EFB access {}, EFB copies to texture only {}, defer EFB copies "
                      "{}, XFB copies to texture only {}, immediate XFB {}, ignore format changes "
-                     "{}, bounding box {}, VBI skip {}\n",
+                     "{}, bounding box {}, VBI skip {}, CPU cull {}, shared texture memory {}, EFB VRAM "
+                     "copies {}, depth clamp {}\n",
                      OnOff(!Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE)),
                      OnOff(Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM)),
                      OnOff(Config::Get(Config::GFX_HACK_DEFER_EFB_COPIES)),
@@ -1245,7 +1395,11 @@ std::string DescribeEmulation(Core::System& system)
                      OnOff(Config::Get(Config::GFX_HACK_IMMEDIATE_XFB)),
                      OnOff(!Config::Get(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES)),
                      OnOff(Config::Get(Config::GFX_HACK_BBOX_ENABLE)),
-                     OnOff(Config::Get(Config::GFX_HACK_VI_SKIP)));
+                     OnOff(Config::Get(Config::GFX_HACK_VI_SKIP)),
+                     OnOff(Config::Get(Config::GFX_CPU_CULL)),
+                     OnOff(Config::Get(Config::GFX_HACK_SHARED_TEXTURE_MEMORY)),
+                     OnOff(!Config::Get(Config::GFX_HACK_DISABLE_COPY_TO_VRAM)),
+                     OnOff(Config::Get(Config::GFX_HACK_VERTEX_DEPTH_CLAMP)));
   return out;
 }
 
@@ -1315,6 +1469,7 @@ void Start(Core::System& system, double seconds, std::string host_description)
 
   s_capture = {};
   s_capture.seconds = seconds;
+  DrawStateLog::Start();
   s_capture.module_start = reinterpret_cast<uintptr_t>(&_start);
   s_capture.module_end = reinterpret_cast<uintptr_t>(__end__);
   s_capture.ppc_state = &system.GetPPCState();

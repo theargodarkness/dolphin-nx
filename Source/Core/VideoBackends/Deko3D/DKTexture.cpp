@@ -8,12 +8,16 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <vector>
 
 #include "Common/Align.h"
 #include "Common/Assert.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
+
+#include "Core/Config/GraphicsSettings.h"
 
 #include "VideoBackends/Deko3D/DKCommandBufferManager.h"
 #include "VideoBackends/Deko3D/DKContext.h"
@@ -69,12 +73,109 @@ DkTileSize PickTileSize(const TextureConfig& config)
 
   return static_cast<DkTileSize>(tile);
 }
+// One shared block that textures are carved out of. free_ranges maps offset to length.
+struct Chunk
+{
+  dk::UniqueMemBlock block;
+  std::map<u32, u32> free_ranges;
+  u32 used = 0;
+};
+
+constexpr u32 CHUNK_SIZE = 16 * 1024 * 1024;
+// Anything larger gets a block of its own, as every texture used to.
+constexpr u32 MAX_SHARED_TEXTURE_SIZE = 2 * 1024 * 1024;
+
+// Only ever touched from the video thread.
+std::vector<std::unique_ptr<Chunk>> s_chunks;
+
+bool CarveFrom(Chunk& chunk, u32 size, u32 alignment, u32* offset_out)
+{
+  for (auto it = chunk.free_ranges.begin(); it != chunk.free_ranges.end(); ++it)
+  {
+    const u32 start = it->first;
+    const u32 end = start + it->second;
+    const u64 aligned = (static_cast<u64>(start) + alignment - 1) / alignment * alignment;
+    if (aligned + size > end)
+      continue;
+
+    const u32 offset = static_cast<u32>(aligned);
+    chunk.free_ranges.erase(it);
+    if (offset > start)
+      chunk.free_ranges.emplace(start, offset - start);
+    if (offset + size < end)
+      chunk.free_ranges.emplace(offset + size, end - (offset + size));
+    chunk.used += size;
+    *offset_out = offset;
+    return true;
+  }
+  return false;
+}
+
+Chunk* AllocateShared(u32 size, u32 alignment, u32* offset_out)
+{
+  for (const std::unique_ptr<Chunk>& chunk : s_chunks)
+  {
+    if (CarveFrom(*chunk, size, alignment, offset_out))
+      return chunk.get();
+  }
+
+  auto chunk = std::make_unique<Chunk>();
+  chunk->block = dk::MemBlockMaker{g_dk_context->GetDevice(), CHUNK_SIZE}
+                     .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
+                     .create();
+  if (!chunk->block)
+    return nullptr;
+  chunk->free_ranges.emplace(0, CHUNK_SIZE);
+  if (!CarveFrom(*chunk, size, alignment, offset_out))
+    return nullptr;
+
+  s_chunks.push_back(std::move(chunk));
+  return s_chunks.back().get();
+}
+
+// The range must no longer be referenced by any command buffer the GPU has yet to finish.
+void FreeShared(Chunk* chunk, u32 offset, u32 size)
+{
+  chunk->used -= std::min(chunk->used, size);
+
+  auto next = chunk->free_ranges.lower_bound(offset);
+  if (next != chunk->free_ranges.begin())
+  {
+    const auto previous = std::prev(next);
+    if (previous->first + previous->second == offset)
+    {
+      offset = previous->first;
+      size += previous->second;
+      chunk->free_ranges.erase(previous);
+    }
+  }
+  if (next != chunk->free_ranges.end() && offset + size == next->first)
+  {
+    size += next->second;
+    chunk->free_ranges.erase(next);
+  }
+  chunk->free_ranges.emplace(offset, size);
+
+  // Keep one empty chunk around so a scene change does not have to ask for it again.
+  if (chunk->used != 0)
+    return;
+  const auto empty = std::ranges::count_if(s_chunks, [](const auto& c) { return c->used == 0; });
+  if (empty > 1)
+    std::erase_if(s_chunks, [chunk](const auto& c) { return c.get() == chunk; });
+}
 }  // namespace
+
+void ClearTextureMemoryPool()
+{
+  s_chunks.clear();
+}
 
 DKTexture::DKTexture(const TextureConfig& config, dk::UniqueMemBlock memblock,
                      const dk::ImageLayout& layout, const dk::Image& image,
-                     const DkImageDescriptor& descriptor)
+                     const DkImageDescriptor& descriptor, void* shared_chunk, u32 shared_offset,
+                     u32 shared_size)
     : AbstractTexture(config), m_memblock(std::move(memblock)), m_layout(layout), m_image(image),
+      m_shared_chunk(shared_chunk), m_shared_offset(shared_offset), m_shared_size(shared_size),
       m_descriptor(descriptor)
 {
 }
@@ -85,8 +186,24 @@ DKTexture::~DKTexture()
     state_tracker->UnbindTexture(this);
 
   // Adopted images do not own their memory, so only the ones that do stop being tracked here.
-  if (m_memblock)
+  if (m_memblock || m_shared_chunk)
     MemoryTracker::Unregister(dkImageGetGpuAddr(&m_image));
+
+  if (m_shared_chunk)
+  {
+    // The range goes back once the GPU is done with every command buffer that used it.
+    Chunk* const chunk = static_cast<Chunk*>(m_shared_chunk);
+    const u32 offset = m_shared_offset;
+    const u32 size = m_shared_size;
+    if (g_dk_command_buffer_mgr)
+    {
+      g_dk_command_buffer_mgr->DeferCleanup(
+          [chunk, offset, size] { FreeShared(chunk, offset, size); });
+    }
+    else
+      FreeShared(chunk, offset, size);
+    return;
+  }
 
   DeferMemBlockDestruction(std::move(m_memblock));
 }
@@ -160,20 +277,42 @@ std::unique_ptr<DKTexture> DKTexture::Create(const TextureConfig& config, std::s
   dk::ImageLayout layout;
   layout_maker.initialize(layout);
 
-  dk::UniqueMemBlock memblock =
-      dk::MemBlockMaker{device, static_cast<u32>(Common::AlignUp(
-                                    layout.getSize(),
-                                    std::max<u64>(layout.getAlignment(), DK_MEMBLOCK_ALIGNMENT)))}
-          .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
-          .create();
-  if (!memblock)
+  const u32 memblock_size = static_cast<u32>(Common::AlignUp(
+      layout.getSize(), std::max<u64>(layout.getAlignment(), DK_MEMBLOCK_ALIGNMENT)));
+
+  // Creating a memory block is a round trip to the GPU driver's service, and a scene change can
+  // ask for dozens of textures in one frame. Ordinary sampled textures share large blocks
+  // instead. Render targets are left out: theirs can carry compression state from the previous
+  // image at the same address.
+  const u32 image_size = static_cast<u32>(layout.getSize());
+  const u32 image_alignment = std::max<u32>(layout.getAlignment(), DK_MEMBLOCK_ALIGNMENT);
+  const bool share_memory = !config.IsRenderTarget() && !config.IsComputeImage() &&
+                            !config.IsMultisampled() && image_size <= MAX_SHARED_TEXTURE_SIZE &&
+                            Config::Get(Config::GFX_HACK_SHARED_TEXTURE_MEMORY);
+
+  Chunk* chunk = nullptr;
+  u32 chunk_offset = 0;
+  if (share_memory)
+    chunk = AllocateShared(image_size, image_alignment, &chunk_offset);
+
+  dk::UniqueMemBlock memblock;
+  if (!chunk)
   {
-    ERROR_LOG_FMT(VIDEO, "deko3d: failed to allocate image memory for '{}'", name);
-    return nullptr;
+    memblock = dk::MemBlockMaker{device, memblock_size}
+                   .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
+                   .create();
+    if (!memblock)
+    {
+      ERROR_LOG_FMT(VIDEO, "deko3d: failed to allocate image memory for '{}'", name);
+      return nullptr;
+    }
   }
 
   dk::Image image;
-  image.initialize(layout, memblock, 0);
+  if (chunk)
+    image.initialize(layout, chunk->block, chunk_offset);
+  else
+    image.initialize(layout, memblock, 0);
 
   dk::ImageView view{image};
   DkImageDescriptor descriptor{};
@@ -184,7 +323,8 @@ std::unique_ptr<DKTexture> DKTexture::Create(const TextureConfig& config, std::s
                                       config.height, config.layers, static_cast<int>(config.format),
                                       config.IsRenderTarget()));
 
-  return std::make_unique<DKTexture>(config, std::move(memblock), layout, image, descriptor);
+  return std::make_unique<DKTexture>(config, std::move(memblock), layout, image, descriptor,
+                                     chunk, chunk_offset, image_size);
 }
 
 std::unique_ptr<DKTexture> DKTexture::CreateAdopted(const TextureConfig& config,

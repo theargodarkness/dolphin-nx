@@ -4,8 +4,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <set>
 #include <span>
 #include <string>
@@ -108,8 +110,20 @@ public:
 
   void UpdateDBATMappings(const PowerPC::BatTable& dbat_table);
   void AddPageTableMapping(u32 logical_address, u32 translated_address, bool writeable);
-  void RemovePageTableMappings(const std::set<u32>& mappings);
+  void RemovePageTableMappings(const std::pmr::set<u32>& mappings);
   void RemoveAllPageTableMappings();
+  // False where the host cannot map guest memory so that reads succeed and writes fault.
+  static bool SupportsReadOnlyMappings();
+  // For diagnostics only. May be read from another thread, where it is merely approximate.
+  size_t GetPageTableMappingCount() const { return m_page_table_mapping_count; }
+
+  // One byte per 4 KiB of logical address space, saying whether a page table mapping makes that
+  // whole guest page readable or writable through the logical fastmem base. This is for code
+  // that cannot be backpatched after a fault, and it only holds while MSR.DR is set.
+  static constexpr u8 PAGE_TABLE_FASTMEM_READ = 1;
+  static constexpr u8 PAGE_TABLE_FASTMEM_WRITE = 2;
+  static constexpr size_t PAGE_TABLE_FASTMEM_FLAG_COUNT = size_t(1) << 20;
+  const u8* GetPageTableFastmemFlags() const { return m_page_table_fastmem_flags.get(); }
 
   void Clear();
 
@@ -274,6 +288,10 @@ private:
   // The key is the logical address
   std::map<u32, LogicalMemoryView> m_dbat_mapped_entries;
   std::map<u32, LogicalMemoryView> m_page_table_mapped_entries;
+  std::atomic<size_t> m_page_table_mapping_count{0};
+  bool m_page_table_mapping_failed = false;
+  std::unique_ptr<u8[]> m_page_table_fastmem_flags =
+      std::make_unique<u8[]>(PAGE_TABLE_FASTMEM_FLAG_COUNT);
 
   std::array<void*, PowerPC::BAT_PAGE_COUNT> m_physical_page_mappings{};
   std::array<void*, PowerPC::BAT_PAGE_COUNT> m_logical_page_mappings{};
