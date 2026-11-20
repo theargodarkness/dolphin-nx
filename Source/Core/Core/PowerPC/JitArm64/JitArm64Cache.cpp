@@ -180,7 +180,7 @@ void JitArm64BlockCache::DestroyBlock(JitBlock& block)
   }
 }
 
-void JitArm64BlockCache::RemoveSetAsideBlock(std::unordered_map<u64, SetAsideBlock>::iterator it,
+void JitArm64BlockCache::RemoveSetAsideBlock(std::pmr::unordered_map<u64, SetAsideBlock>::iterator it,
                                              bool free_code)
 {
   const JitBlockData& data = it->second.data;

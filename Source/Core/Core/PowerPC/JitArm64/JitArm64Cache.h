@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <memory_resource>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -73,9 +74,10 @@ private:
   }
   bool CanSetAside(const JitBlock& block) const;
   void QueueRangesToFree(const JitBlockData& data);
-  void RemoveSetAsideBlock(std::unordered_map<u64, SetAsideBlock>::iterator it, bool free_code);
+  void RemoveSetAsideBlock(std::pmr::unordered_map<u64, SetAsideBlock>::iterator it, bool free_code);
 
-  std::unordered_map<u64, SetAsideBlock> m_set_aside_blocks;
+  std::pmr::unsynchronized_pool_resource m_set_aside_pool;
+  std::pmr::unordered_map<u64, SetAsideBlock> m_set_aside_blocks{&m_set_aside_pool};
   // Keys in the order they were set aside, with the serial that tells stale entries apart.
   std::deque<std::pair<u64, u64>> m_set_aside_order;
   size_t m_set_aside_code_size = 0;

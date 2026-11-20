@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -217,20 +218,26 @@ private:
   // Fast but risky block lookup based on fast_block_map.
   size_t FastLookupIndexForAddress(u32 address, u32 msr);
 
+  // Games that swap their code in and out destroy and recreate blocks by the thousand at a time.
+  // The nodes of the maps below come from a pool owned by the CPU thread, so that this neither
+  // pays for the general allocator nor waits for its lock while another thread holds it.
+  std::pmr::unsynchronized_pool_resource m_node_pool;
+
   // links_to hold all exit points of all valid blocks in a reverse way.
   // It is used to query all blocks which links to an address.
-  std::unordered_map<u32, std::unordered_set<JitBlock*>> links_to;  // destination_PC -> number
+  std::pmr::unordered_map<u32, std::pmr::unordered_set<JitBlock*>> links_to{
+      &m_node_pool};  // destination_PC -> number
 
   // Map indexed by the physical address of the entry point.
   // This is used to query the block based on the current PC in a slow way.
-  std::multimap<u32, JitBlock> block_map;  // start_addr -> block
+  std::pmr::multimap<u32, JitBlock> block_map{&m_node_pool};  // start_addr -> block
 
   // Range of overlapping code indexed by a masked physical address.
   // This is used for invalidation of memory regions. The range is grouped
   // in macro blocks of each 0x100 bytes.
   static constexpr u32 BLOCK_RANGE_SIZE = 0x100;
   static constexpr u32 BLOCK_RANGE_MAP_MASK = ~(BLOCK_RANGE_SIZE - 1);
-  std::map<u32, std::unordered_set<JitBlock*>> block_range_map;
+  std::pmr::map<u32, std::pmr::unordered_set<JitBlock*>> block_range_map{&m_node_pool};
 
   // This bitset shows which cachelines overlap with any blocks.
   // It is used to provide a fast way to query if no icache invalidation is needed.

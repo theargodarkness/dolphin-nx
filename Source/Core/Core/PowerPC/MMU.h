@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <map>
+#include <memory_resource>
 #include <optional>
 #include <set>
 #include <span>
@@ -369,15 +370,20 @@ private:
   std::vector<u8> m_page_table;
   // END STATE_TO_SAVE
 
+  // Games that page memory in and out change these maps constantly. Their nodes come from a pool
+  // owned by the CPU thread, so that this neither pays for the general allocator nor waits for
+  // its lock while another thread holds it.
+  std::pmr::unsynchronized_pool_resource m_mapping_pool;
+
   // This keeps track of all valid page table mappings in m_page_table.
   // The key is the logical address.
-  std::map<u32, PageMapping> m_page_mappings;
+  std::pmr::map<u32, PageMapping> m_page_mappings{&m_mapping_pool};
 
   // These are kept around just for their memory allocations. They are always cleared before use.
   std::vector<u8> m_temp_page_table;
-  std::set<u32> m_removed_mappings;
-  std::map<u32, u32> m_added_readonly_mappings;
-  std::map<u32, u32> m_added_readwrite_mappings;
+  std::pmr::set<u32> m_removed_mappings{&m_mapping_pool};
+  std::pmr::map<u32, u32> m_added_readonly_mappings{&m_mapping_pool};
+  std::pmr::map<u32, u32> m_added_readwrite_mappings{&m_mapping_pool};
 
   BatTable m_ibat_table;
   BatTable m_dbat_table;

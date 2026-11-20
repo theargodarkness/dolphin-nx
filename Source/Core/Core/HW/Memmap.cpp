@@ -500,7 +500,7 @@ void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_
   }
 }
 
-void MemoryManager::RemovePageTableMappings(const std::set<u32>& mappings)
+void MemoryManager::RemovePageTableMappings(const std::pmr::set<u32>& mappings)
 {
   switch (m_host_page_type)
   {

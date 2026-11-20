@@ -7,6 +7,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <set>
 #include <span>
 #include <string>
@@ -109,7 +110,7 @@ public:
 
   void UpdateDBATMappings(const PowerPC::BatTable& dbat_table);
   void AddPageTableMapping(u32 logical_address, u32 translated_address, bool writeable);
-  void RemovePageTableMappings(const std::set<u32>& mappings);
+  void RemovePageTableMappings(const std::pmr::set<u32>& mappings);
   void RemoveAllPageTableMappings();
   // False where the host cannot map guest memory so that reads succeed and writes fault.
   static bool SupportsReadOnlyMappings();
