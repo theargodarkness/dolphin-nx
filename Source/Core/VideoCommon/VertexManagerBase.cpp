@@ -509,6 +509,23 @@ void VertexManagerBase::Flush()
 #endif
 
   DrawStateLog::RecordDraw(m_index_generator.GetIndexLen());
+  if (xfmem.projection.type == ProjectionType::Orthographic)
+  {
+    if (const NativeVertexFormat* const format = VertexLoaderManager::GetCurrentVertexFormat())
+    {
+      const PortableVertexDeclaration& declaration = format->GetVertexDeclaration();
+      const u32 stride = declaration.stride;
+      if (declaration.position.enable && stride != 0)
+      {
+        DrawStateLog::RecordFlatDraw(
+            m_base_buffer_pointer + declaration.position.offset,
+            static_cast<u32>(declaration.position.components),
+            declaration.colors[0].enable ? m_base_buffer_pointer + declaration.colors[0].offset :
+                                           nullptr,
+            stride, static_cast<u32>((m_cur_buffer_pointer - m_base_buffer_pointer) / stride));
+      }
+    }
+  }
 
   // Track some stats used elsewhere by the anamorphic widescreen heuristic.
   auto& system = Core::System::GetInstance();
