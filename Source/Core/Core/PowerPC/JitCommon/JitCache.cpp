@@ -562,6 +562,23 @@ void JitBaseBlockCache::LinkBlockExits(JitBlock& block)
   {
     if (!e.linkStatus)
     {
+#ifdef _M_ARM_64
+      if (UsesEntryPoints())
+      {
+        // The entry points are what the dispatcher itself goes by, and looking one up needs
+        // neither an address translation nor a search. Linking only needs the entry point.
+        u8* const entry_point =
+            GetEntryPoint(FastLookupIndexForAddress(e.exitAddress, block.feature_flags));
+        if (entry_point)
+        {
+          JitBlock destination(false);
+          destination.normalEntry = entry_point;
+          WriteLinkBlock(e, &destination);
+          e.linkStatus = true;
+        }
+        continue;
+      }
+#endif
       JitBlock* destinationBlock = GetBlockFromStartAddress(e.exitAddress, block.feature_flags);
       if (destinationBlock)
       {

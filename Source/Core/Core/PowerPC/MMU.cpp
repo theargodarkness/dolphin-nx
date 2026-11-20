@@ -1668,6 +1668,9 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
     }
   };
 
+  constexpr u32 UNCHANGED_STRETCH = 2048;
+  static_assert(PAGE_TABLE_MIN_SIZE % UNCHANGED_STRETCH == 0);
+
   bool run_pass_2 = false;
 
   // Pass 1: Remove old mappings and add new primary (H=0) mappings.
@@ -1678,6 +1681,15 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
 
     for (u32 j = 0; j < PAGE_TABLE_MIN_SIZE; j += 64)
     {
+      // Nearly all of the table is unchanged on any one update, so rule out a whole stretch of
+      // it at a time before looking at single PTEGs.
+      if ((j % UNCHANGED_STRETCH) == 0 &&
+          std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) == 0)
+      {
+        j += UNCHANGED_STRETCH - 64;
+        continue;
+      }
+
       if (compare_64_bytes(old_page_table + i + j, new_page_table + i + j)) [[likely]]
         continue;
 
@@ -1754,6 +1766,15 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
 
       for (u32 j = 0; j < PAGE_TABLE_MIN_SIZE; j += 64)
       {
+        // Nearly all of the table is unchanged on any one update, so rule out a whole stretch of
+        // it at a time before looking at single PTEGs.
+        if ((j % UNCHANGED_STRETCH) == 0 &&
+            std::memcmp(old_page_table + i + j, new_page_table + i + j, UNCHANGED_STRETCH) == 0)
+        {
+          j += UNCHANGED_STRETCH - 64;
+          continue;
+        }
+
         if (compare_64_bytes(old_page_table + i + j, new_page_table + i + j)) [[likely]]
           continue;
 

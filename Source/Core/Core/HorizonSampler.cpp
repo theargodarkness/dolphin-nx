@@ -958,6 +958,7 @@ void AppendSlowestBucket(std::string& out, const std::vector<std::size_t>& order
 
   constexpr std::size_t MAX_THREADS_LISTED = 5;
   constexpr std::size_t MAX_STACKS_LISTED = 12;
+  constexpr std::size_t MAX_STACKS_LISTED_IN_FULL = 400;
   for (std::size_t column = 0; column < std::min(order.size(), MAX_THREADS_LISTED); ++column)
   {
     std::map<std::string, u64> stacks;
@@ -984,8 +985,11 @@ void AppendSlowestBucket(std::string& out, const std::vector<std::size_t>& order
     std::vector<std::pair<std::string_view, u64>> by_count(stacks.begin(), stacks.end());
     std::sort(by_count.begin(), by_count.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
-    if (by_count.size() > MAX_STACKS_LISTED)
-      by_count.resize(MAX_STACKS_LISTED);
+    // A row is short enough that the two busiest threads can be listed in full, which is what
+    // it takes to see where a stall that is spread over many places went.
+    const std::size_t max_stacks = column < 2 ? MAX_STACKS_LISTED_IN_FULL : MAX_STACKS_LISTED;
+    if (by_count.size() > max_stacks)
+      by_count.resize(max_stacks);
 
     out += fmt::format("  T{}: {} ({} samples)\n", column,
                        s_capture.threads[order[column]].info.name.data(), total);
@@ -1371,7 +1375,7 @@ std::string DescribeEmulation(Core::System& system)
   out += fmt::format("hacks: skip EFB access {}, EFB copies to texture only {}, defer EFB copies "
                      "{}, XFB copies to texture only {}, immediate XFB {}, ignore format changes "
                      "{}, bounding box {}, VBI skip {}, CPU cull {}, shared texture memory {}, EFB VRAM "
-                     "copies {}\n",
+                     "copies {}, depth clamp {}\n",
                      OnOff(!Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE)),
                      OnOff(Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM)),
                      OnOff(Config::Get(Config::GFX_HACK_DEFER_EFB_COPIES)),
@@ -1382,7 +1386,8 @@ std::string DescribeEmulation(Core::System& system)
                      OnOff(Config::Get(Config::GFX_HACK_VI_SKIP)),
                      OnOff(Config::Get(Config::GFX_CPU_CULL)),
                      OnOff(Config::Get(Config::GFX_HACK_SHARED_TEXTURE_MEMORY)),
-                     OnOff(!Config::Get(Config::GFX_HACK_DISABLE_COPY_TO_VRAM)));
+                     OnOff(!Config::Get(Config::GFX_HACK_DISABLE_COPY_TO_VRAM)),
+                     OnOff(Config::Get(Config::GFX_HACK_VERTEX_DEPTH_CLAMP)));
   return out;
 }
 
