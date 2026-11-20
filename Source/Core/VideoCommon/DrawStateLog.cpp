@@ -13,6 +13,7 @@
 
 #include <fmt/format.h>
 
+#include "Core/HW/Memmap.h"
 #include "Core/System.h"
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/PixelShaderManager.h"
@@ -114,7 +115,7 @@ void RecordDraw(u32 index_count)
 void RecordFlatDraw(const u8* positions, u32 position_components, const u8* colors, u32 stride,
                     u32 vertex_count)
 {
-  if (!s_recording.load(std::memory_order_relaxed) || vertex_count == 0)
+  if (!s_recording.load(std::memory_order_relaxed))
     return;
   if (xfmem.projection.type != ProjectionType::Orthographic)
     return;
@@ -153,7 +154,7 @@ void RecordFlatDraw(const u8* positions, u32 position_components, const u8* colo
   }
 
   u32 first_color = 0;
-  if (colors)
+  if (colors && vertex_count != 0)
     std::memcpy(&first_color, colors, sizeof(first_color));
 
   const auto& constants = Core::System::GetInstance().GetPixelShaderManager().constants;
@@ -161,11 +162,36 @@ void RecordFlatDraw(const u8* positions, u32 position_components, const u8* colo
   s_detail += fmt::format(
       "  v{} x {:.3f}..{:.3f} y {:.3f}..{:.3f} z {:.4f}..{:.4f} | blend {:06x} z {:06x} atest "
       "{:06x} gen {:06x} pe {:06x} | tex {:08x} {:06x} | tev0 {:06x} {:06x} | vtxcol {:08x} | "
-      "reg",
+      "",
       vertex_count, min_x, max_x, min_y, max_y, min_z, max_z, bpmem.blendmode.hex, bpmem.zmode.hex,
       bpmem.alpha_test.hex, bpmem.genMode.hex, bpmem.zcontrol.hex,
       static_cast<u32>(unit.texImage3.image_base) << 5, unit.texImage0.hex,
       bpmem.combiners[0].colorC.hex, bpmem.combiners[0].alphaC.hex, first_color);
+  // What a small texture holds in guest memory, to tell an empty texture from one that fails to
+  // show: how many of its first bytes are not zero, and the first of them.
+  {
+    const u32 address = static_cast<u32>(unit.texImage3.image_base) << 5;
+    const u32 width = unit.texImage0.width + 1;
+    const u32 height = unit.texImage0.height + 1;
+    if (width <= 64 && height <= 64)
+    {
+      const u32 length = std::min<u32>(width * height * 4, 4096);
+      const u8* const data = Core::System::GetInstance().GetMemory().GetPointerForRange(
+          address, length);
+      if (data)
+      {
+        u32 nonzero = 0;
+        for (u32 i = 0; i < length; ++i)
+          nonzero += data[i] != 0;
+        s_detail += fmt::format(" texels {}/{} nonzero, first", nonzero, length);
+        for (u32 i = 0; i < 16; ++i)
+          s_detail += fmt::format(" {:02x}", data[i]);
+        s_detail += " |";
+      }
+    }
+  }
+
+  s_detail += " reg";
   for (const auto& color : constants.colors)
     s_detail += fmt::format(" {},{},{},{}", color[0], color[1], color[2], color[3]);
   s_detail += " | konst";

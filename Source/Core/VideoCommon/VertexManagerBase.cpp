@@ -515,15 +515,21 @@ void VertexManagerBase::Flush()
     {
       const PortableVertexDeclaration& declaration = format->GetVertexDeclaration();
       const u32 stride = declaration.stride;
-      if (declaration.position.enable && stride != 0)
-      {
-        DrawStateLog::RecordFlatDraw(
-            m_base_buffer_pointer + declaration.position.offset,
-            static_cast<u32>(declaration.position.components),
-            declaration.colors[0].enable ? m_base_buffer_pointer + declaration.colors[0].offset :
-                                           nullptr,
-            stride, static_cast<u32>((m_cur_buffer_pointer - m_base_buffer_pointer) / stride));
-      }
+      // The vertices of this draw are the last ones written. Only read them if they are sure to
+      // be in the buffer, and never many of them.
+      const u64 vertex_count = m_index_generator.GetNumVerts();
+      const bool readable =
+          declaration.position.enable && stride != 0 && vertex_count != 0 &&
+          vertex_count <= 1024 && m_cur_buffer_pointer >= m_base_buffer_pointer &&
+          static_cast<u64>(m_cur_buffer_pointer - m_base_buffer_pointer) >= vertex_count * stride;
+      const u8* const first_vertex =
+          readable ? m_cur_buffer_pointer - vertex_count * stride : nullptr;
+      DrawStateLog::RecordFlatDraw(
+          readable ? first_vertex + declaration.position.offset : nullptr,
+          static_cast<u32>(declaration.position.components),
+          readable && declaration.colors[0].enable ? first_vertex + declaration.colors[0].offset :
+                                                     nullptr,
+          stride, readable ? static_cast<u32>(vertex_count) : 0);
     }
   }
 
