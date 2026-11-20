@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <map>
 #include <optional>
@@ -118,6 +119,14 @@ enum class XCheckTLBFlag
 class MMU
 {
 public:
+  // Running totals for the profile capture, to tell what a stall in a paging game is made of.
+  static inline std::atomic<u64> s_tlb_invalidations_translating{0};
+  static inline std::atomic<u64> s_tlb_invalidations_real_mode{0};
+  static inline std::atomic<u64> s_page_table_scans{0};
+  static inline std::atomic<u64> s_page_table_scan_bytes{0};
+  static inline std::atomic<u64> s_page_table_entries_changed{0};
+  static inline std::atomic<u64> s_fastmem_backpatches{0};
+
   MMU(Core::System& system, Memory::MemoryManager& memory, PowerPC::PowerPCManager& power_pc);
   MMU(const MMU& other) = delete;
   MMU(MMU&& other) = delete;

@@ -55,6 +55,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "VideoCommon/DrawStateLog.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/VertexLoaderManager.h"
@@ -1255,6 +1256,7 @@ std::string BuildReport()
 
   AppendLoaders(out);
   AppendUnknownCode(out);
+  out += DrawStateLog::Finish();
   return out;
 }
 
@@ -1362,6 +1364,16 @@ std::string DescribeEmulation(Core::System& system)
       JitBaseBlockCache::s_blocks_reused.load(std::memory_order_relaxed),
       JitBaseBlockCache::s_blocks_not_reusable.load(std::memory_order_relaxed));
 
+  out += fmt::format(
+      "totals since launch: TLB invalidations {} while translating + {} in real mode, page table "
+      "scans {} ({} KiB compared, {} entries changed), fast memory accesses turned slow {}\n",
+      PowerPC::MMU::s_tlb_invalidations_translating.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_tlb_invalidations_real_mode.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_page_table_scans.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_page_table_scan_bytes.load(std::memory_order_relaxed) / 1024,
+      PowerPC::MMU::s_page_table_entries_changed.load(std::memory_order_relaxed),
+      PowerPC::MMU::s_fastmem_backpatches.load(std::memory_order_relaxed));
+
   const int efb_scale = Config::Get(Config::GFX_EFB_SCALE);
   out += fmt::format("video: internal resolution {}, MSAA {}x{}, shaders {}, frame generation ",
                      efb_scale == 0 ? "auto" : fmt::format("{}x", efb_scale),
@@ -1457,6 +1469,7 @@ void Start(Core::System& system, double seconds, std::string host_description)
 
   s_capture = {};
   s_capture.seconds = seconds;
+  DrawStateLog::Start();
   s_capture.module_start = reinterpret_cast<uintptr_t>(&_start);
   s_capture.module_end = reinterpret_cast<uintptr_t>(__end__);
   s_capture.ppc_state = &system.GetPPCState();

@@ -414,6 +414,7 @@ bool JitArm64::HandleFastmemFault(SContext* ctx)
   ARM64XEmitter emitter(fastmem_area_start, fastmem_area_end);
 
   emitter.BL(entry_it->slow_access_code);
+  PowerPC::MMU::s_fastmem_backpatches.fetch_add(1, std::memory_order_relaxed);
 
   while (emitter.GetCodePtr() < fastmem_area_end)
     emitter.NOP();

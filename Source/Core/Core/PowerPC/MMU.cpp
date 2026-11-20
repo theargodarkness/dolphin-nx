@@ -1380,6 +1380,9 @@ void MMU::InvalidateTLBEntry(u32 address)
   m_ppc_state.tlb[PowerPC::DATA_TLB_INDEX][entry_index].Invalidate();
   m_ppc_state.tlb[PowerPC::INST_TLB_INDEX][entry_index].Invalidate();
 
+  (m_ppc_state.msr.DR ? s_tlb_invalidations_translating : s_tlb_invalidations_real_mode)
+      .fetch_add(1, std::memory_order_relaxed);
+
   if (m_ppc_state.msr.DR)
     PageTableUpdated();
   else
@@ -1464,6 +1467,9 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
     ClearPageTable();
     return;
   }
+
+  s_page_table_scans.fetch_add(1, std::memory_order_relaxed);
+  s_page_table_scan_bytes.fetch_add(page_table.size(), std::memory_order_relaxed);
 
   m_removed_mappings.clear();
   m_added_readonly_mappings.clear();
@@ -1697,6 +1703,8 @@ void MMU::PageTableUpdated(std::span<const u8> page_table)
       {
         if (std::memcmp(old_page_table + i + j + k, new_page_table + i + j + k, 8) == 0) [[likely]]
           continue;
+
+        s_page_table_entries_changed.fetch_add(1, std::memory_order_relaxed);
 
         // Remove old mappings.
         UPTE_Lo old_pte1(Common::swap32(old_page_table + i + j + k));

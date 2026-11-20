@@ -23,6 +23,7 @@
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/DataReader.h"
+#include "VideoCommon/DrawStateLog.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/GraphicsModActionData.h"
@@ -506,6 +507,8 @@ void VertexManagerBase::Flush()
            bpmem.genMode.numtexgens.Value(), bpmem.dstalpha.enable.Value(),
            (bpmem.alpha_test.hex >> 16) & 0xff);
 #endif
+
+  DrawStateLog::RecordDraw(m_index_generator.GetIndexLen());
 
   // Track some stats used elsewhere by the anamorphic widescreen heuristic.
   auto& system = Core::System::GetInstance();
